@@ -54,10 +54,11 @@ function runInTransaction<T>(
 
 // ---------------------------- Categories ----------------------------
 
-export function listCategories(): Promise<Category[]> {
-  return runInTransaction(STORE_CATEGORIES, "readonly", (store) => {
-    return store.getAll() as IDBRequest<Category[]>;
+export async function listCategories(): Promise<Category[]> {
+  const records = await runInTransaction(STORE_CATEGORIES, "readonly", (store) => {
+    return store.getAll() as IDBRequest<Array<Category | { id: string }>>;
   });
+  return records.filter((record): record is Category => record.id !== CATEGORY_KEY && "name" in record);
 }
 
 /**
@@ -211,18 +212,18 @@ export function toggleTaskDone(id: string): Promise<void> {
 
 // ---------------------------- Settings (retention) ----------------------------
 
-export function getSettings(): Promise<{ retentionMonths: Retention }> {
-  return runInTransaction(STORE_CATEGORIES, "readonly", (store) => {
-    const req = store.get(CATEGORY_KEY);
-    return req as unknown as IDBRequest<{ retentionMonths: Retention }>;
+export type DeviceSettings = { retentionMonths: Retention; lastSyncAt?: number };
+
+export async function getSettings(): Promise<DeviceSettings> {
+  const value = await runInTransaction(STORE_CATEGORIES, "readonly", (store) => {
+    return store.get(CATEGORY_KEY) as IDBRequest<(DeviceSettings & { id: string }) | undefined>;
   });
+  return value ? { retentionMonths: value.retentionMonths, lastSyncAt: value.lastSyncAt } : { retentionMonths: 1 };
 }
 
-export function saveSettings(
-  value: { retentionMonths: Retention }
-): Promise<void> {
+export function saveSettings(value: DeviceSettings): Promise<void> {
   return runInTransaction(STORE_CATEGORIES, "readwrite", (store) => {
-    store.put(value, CATEGORY_KEY);
-    return store as unknown as IDBRequest<void>;
+    // This store has a keyPath, so the settings record carries its reserved ID.
+    return store.put({ id: CATEGORY_KEY, ...value }) as unknown as IDBRequest<void>;
   });
 }

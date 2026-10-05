@@ -1,102 +1,66 @@
 # Session Tracker
 
-A small, mobile-first web app that times what you do — Work, Study, Hobby,
-Ideas — and keeps the history on your own device.
+Session Tracker is a mobile-first, local-first time tracker. It works offline and saves device data in IndexedDB. It now also supports optional accounts and cross-device sync with Better Auth, Neon Postgres, and Drizzle ORM.
 
-Phase 1 only: **no account, no server, no login for real.** Everything lives
-inside your phone's browser storage (IndexedDB). Nothing is uploaded anywhere.
+## What is included
 
----
+- Work, Study, Hobby, Ideas, and permanent custom categories
+- Timestamp-based stopwatch that stays correct when the phone locks
+- Notes, reusable category task lists, summaries, and day-based logs
+- PWA manifest, icons, service worker, and offline app shell
+- Email/password accounts through Better Auth
+- UUID records with `createdAt`, `updatedAt`, and soft deletes
+- Local-first sync using newest `updatedAt` wins
+- Running sessions never leave their device until they are closed
+- Every server read and write is scoped to the signed-in user
 
-## How to run it
-
-```bash
-bun install     # download the pieces it needs (only once)
-bun run dev     # start the app on http://localhost:3000
-```
-
-To build a production copy:
-
-```bash
-bun run build
-```
-
----
-
-## The four screens
-
-| Screen | What it is for |
-| --- | --- |
-| 1. **Log in** | A big `LOG IN` pill that just opens the app, plus a smaller `Session's Logs` pill at the bottom. |
-| 2. **Categories** | Big pills with chevrons: Work, Study, Hobby, Ideas (plus any you add). Tapping one starts a session. The `New Entry / Add Category` button at the bottom saves your own categories forever. |
-| 3. **Running session** | A live stopwatch. You can add a note, work through a checklist for that category, `Switch to Other` (ends this one and takes you back to the picker) or `Close Session` (optional one-line summary, then saves the log). |
-| 4. **Session's Logs** | Day blocks, newest first, labelled `Today`, `Yesterday`, `2 days ago` etc. Tap a day to open a scrollable box of its sessions (category, start time, end time, duration, notes) with **totals per category** right underneath. A setting at the bottom keeps logs for 1, 2 or 3 months. |
-
----
-
-## Things worth knowing
-
-**The timer cannot drift.** The stopwatch does not count seconds in a variable.
-It stores *the moment you started* (`startedAt`) and works out the difference
-every time the screen redraws. If your phone locks, or you close the app and
-come back tomorrow, the elapsed time is still correct — it is recomputed from
-the clock, not remembered from a counter.
-
-If you close the app mid-session, the session is still there when you return;
-the app drops you straight back onto the running stopwatch.
-
-**Records are built for a future sync.** Every record (category, session, task)
-carries:
-
-- `id` — a random UUID generated on your device (never a row number, so records
-  can be merged safely later without clashing)
-- `createdAt` / `updatedAt` — timestamps in milliseconds
-- `deleted` — a soft-delete flag
-
-Nothing is ever hard-deleted. Lowering the "keep logs" setting just flags old
-records as deleted instead of destroying them, which is exactly what you want
-when a sync layer is added later.
-
-**Deleting is not exposed in the UI yet.** The flag is there and honoured — the
-logs screen only shows records where `deleted` is false — but there is no
-delete button yet. That is a deliberate Phase 2 item.
-
----
-
-## Design notes
-
-- Background fades from `#F8F9FA` to `#EDF2F7`
-- Dark slate `#24292E` capsule buttons with white text
-- Soft shadows, Inter throughout
-- Every button presses down slightly when tapped
-- Screens slide in smoothly left or right
-- No emojis, badges or notifications anywhere
-
----
-
-## Project layout
-
-```
-src/
-  app/
-    page.tsx        all four screens and the navigation between them
-    layout.tsx      fonts + mobile settings
-    globals.css     colours, shadows, motion
-  components/
-    capsule-button.tsx   the pill button
-    text-input.tsx       name / colour inputs
-  lib/
-    types.ts        the shape of each record
-    db.ts           IndexedDB read/write
-    ids.ts          UUID generation
-    format.ts       "1h 05m 03s", clock times, dates
-    icons.ts        the SVG icons used
-```
-
-Check it before committing anything:
+## Run locally
 
 ```bash
-bun tsc -b --noEmit   # types
-npx eslint src        # lint
-bun run build         # production build
+npm install
+npm run dev
 ```
+
+For a production check:
+
+```bash
+npm run build
+```
+
+## Database setup
+
+Copy `.env.example` to `.env.local` and fill in the values. Never commit `.env.local`.
+
+```bash
+npm run db:generate
+npm run db:migrate
+```
+
+The migration command needs `DATABASE_URL` to point to your Neon database.
+
+## Deploying to Vercel, step by step
+
+1. Go to **vercel.com** and select **Log In**.
+2. Select **Add New...** then **Project**.
+3. Find `Sam-Program-362/Session-Tracker-App` and select **Import**.
+4. Keep the detected framework as **Next.js**.
+5. Open **Environment Variables** and add these three names and values:
+   - `DATABASE_URL`: paste the Neon connection string.
+   - `BETTER_AUTH_SECRET`: paste a long random secret. Do not share it.
+   - `BETTER_AUTH_URL`: paste the Vercel production URL, for example `https://your-project.vercel.app`.
+6. Select **Deploy**.
+7. In the Vercel project, open **Settings**, then **Domains**, and copy the real project URL.
+8. Replace `BETTER_AUTH_URL` with that exact URL if it changed, then select **Save**.
+9. In Vercel, open **Deployments**, open the newest deployment, select the three-dot menu, and select **Redeploy**.
+
+Before the first Vercel deployment, create a Neon project at **neon.tech**, select **Connect**, copy its connection string, and use it for `DATABASE_URL`. Run `npm run db:migrate` locally with that value first, or run the migration from a machine where Node and npm are installed.
+
+## Test sync
+
+1. Open the app while signed in on Device A.
+2. Turn off internet, start and close a session, then turn internet back on.
+3. Wait until Settings says **Synced**.
+4. Open the same account on another browser or device and confirm the session appears.
+5. Change a synced record on the other device, then return to Device A while online. The newer `updatedAt` value wins.
+
+No pull request is created or merged by this project workflow.

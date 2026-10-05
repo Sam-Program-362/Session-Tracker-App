@@ -6,8 +6,10 @@ interface TextInputProps {
   value?: string;
   onChange?: ChangeEventHandler<HTMLInputElement>;
   placeholder?: string;
-  type?: "text" | "color";
+  type?: "text" | "color" | "email" | "password";
   color?: string;
+  required?: boolean;
+  minLength?: number;
   onColorChange?: ChangeEventHandler<HTMLInputElement>;
   autoFocus?: boolean;
 }
@@ -21,6 +23,8 @@ export function TextInput({
   color,
   onColorChange,
   autoFocus = false,
+  required = false,
+  minLength,
 }: TextInputProps) {
   const generatedId = useId();
   const inputId = `stt-text-input-${generatedId.replace(/:/g, "")}`;
@@ -61,8 +65,10 @@ export function TextInput({
           value={value}
           onChange={onChange}
           placeholder={placeholder}
-          type="text"
+          type={type}
           autoFocus={autoFocus}
+          required={required}
+          minLength={minLength}
           className="w-full rounded-xl border border-input/70 bg-white px-3 py-2 text-sm shadow-sm outline-none transition focus:border-input/80 focus:ring-2 focus:ring-ring/30"
         />
       )}

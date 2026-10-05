@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState, useMemo } from "react";
 import { registerServiceWorkerOnce } from "@/lib/sw-registration";
+import { authClient } from "@/lib/auth-client";
+import { syncNow, type SyncState } from "@/lib/sync";
 import {
   listCategories,
   saveSession,
@@ -58,6 +60,9 @@ export default function Home() {
   const [retention, setRetention] = useState<Retention>(1);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [dir, setDir] = useState<"back" | "forward">("forward");
+  const [authOpen, setAuthOpen] = useState(false);
+  const [syncState, setSyncState] = useState<SyncState>("offline");
+  const { data: authSession } = authClient.useSession();
 
   const reload = useCallback(async () => {
     const [cats, allLogs, settings] = await Promise.all([
@@ -93,6 +98,19 @@ export default function Home() {
     registerServiceWorkerOnce();
   }, []);
 
+  // Sync on open and whenever the connection returns. Local IndexedDB remains
+  // the source of truth, so no screen waits for this request.
+  useEffect(() => {
+    const run = () => void syncNow(setSyncState).then(() => reload());
+    run();
+    window.addEventListener("online", run);
+    return () => window.removeEventListener("online", run);
+  }, [reload]);
+
+  useEffect(() => {
+    if (authSession) void syncNow(setSyncState).then(() => reload());
+  }, [authSession, reload]);
+
   // Re-attach to a session that was left running (app closed / phone locked).
   const runningSession = useMemo(
     () => logs.find((l) => l.status === "running" && !l.deleted) ?? null,
@@ -121,6 +139,7 @@ export default function Home() {
         deleted: false,
       });
       await reload();
+      void syncNow(setSyncState);
       setDir("forward");
       setScreen("running");
     },
@@ -138,6 +157,7 @@ export default function Home() {
         updatedAt: Date.now(),
       });
       await reload();
+      void syncNow(setSyncState);
       setDir("back");
       setScreen("logs");
     },
@@ -155,6 +175,7 @@ export default function Home() {
       });
     }
     await reload();
+    void syncNow(setSyncState);
     setDir("back");
     setScreen("categories");
   }, [runningSession, reload]);
@@ -173,14 +194,19 @@ export default function Home() {
 
   // A live session always wins: this keeps the stopwatch on screen after the
   // app is closed or the phone locks, without needing an effect.
-  const visibleScreen: Screen = runningSession ? "running" : screen;
+  const visibleScreen: Screen = runningSession
+    ? "running"
+    : authSession && screen === "login"
+      ? "categories"
+      : screen;
 
   return (
     <div className="flex h-full flex-col">
       <div key={visibleScreen} className={`flex min-h-0 flex-1 flex-col screen-${dir}`}>
         {visibleScreen === "login" && (
           <LoginScreen
-            onLogIn={() => go("categories")}
+            signedIn={Boolean(authSession)}
+            onLogIn={() => authSession ? go("categories") : setAuthOpen(true)}
             onOpenLogs={() => go("logs")}
           />
         )}
@@ -209,11 +235,19 @@ export default function Home() {
             categories={categories}
             retentionMonths={retention}
             onSetRetention={changeRetention}
+            syncState={syncState}
             onSelectCategory={startSession}
             onBack={() => go("login", "back")}
           />
         )}
       </div>
+
+      {authOpen && (
+        <AuthSheet
+          onClose={() => setAuthOpen(false)}
+          onSuccess={() => { setAuthOpen(false); go("categories"); }}
+        />
+      )}
 
       {sheetOpen && (
         <AddCategorySheet
@@ -230,6 +264,7 @@ export default function Home() {
             });
             setSheetOpen(false);
             await reload();
+            void syncNow(setSyncState);
           }}
         />
       )}
@@ -244,9 +279,11 @@ export default function Home() {
 function LoginScreen({
   onLogIn,
   onOpenLogs,
+  signedIn,
 }: {
   onLogIn: () => void;
   onOpenLogs: () => void;
+  signedIn: boolean;
 }) {
   return (
     <main className="flex flex-1 flex-col items-center justify-center px-6 safe-area-bottom">
@@ -264,8 +301,8 @@ function LoginScreen({
 
         <div className="mt-9 flex justify-center">
           <CapsuleButton size="lg" onClick={onLogIn} className="w-48">
-            LOG IN
-          </CapsuleButton>
+          {signedIn ? "CONTINUE" : "LOG IN"}
+        </CapsuleButton>
         </div>
       </div>
 
@@ -513,6 +550,7 @@ function LogsScreen({
   categories,
   retentionMonths,
   onSetRetention,
+  syncState,
   onSelectCategory,
   onBack,
 }: {
@@ -520,6 +558,7 @@ function LogsScreen({
   categories: Category[];
   retentionMonths: Retention;
   onSetRetention: (n: Retention) => void;
+  syncState: SyncState;
   onSelectCategory: (c: Category) => void;
   onBack: () => void;
 }) {
@@ -569,6 +608,9 @@ function LogsScreen({
       </div>
 
       <div className="border-t border-border/60 px-6 py-4 safe-area-bottom">
+        <div className="mb-3 text-xs text-foreground-muted">
+          {syncState === "synced" ? "Synced" : syncState === "syncing" ? "Syncing" : "Waiting for internet"}
+        </div>
         <div className="flex items-center justify-between">
           <span className="text-xs font-semibold uppercase tracking-widest text-foreground-muted">
             Keep logs
@@ -982,6 +1024,47 @@ function SummarySheet({
           Save Log
         </CapsuleButton>
       </div>
+    </Sheet>
+  );
+}
+
+function AuthSheet({
+  onClose,
+  onSuccess,
+}: {
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [mode, setMode] = useState<"signIn" | "signUp">("signIn");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true); setError("");
+    const result = mode === "signIn"
+      ? await authClient.signIn.email({ email, password })
+      : await authClient.signUp.email({ email, password, name: name || email.split("@")[0] });
+    setBusy(false);
+    if (result.error) setError(result.error.message ?? "Please check your details.");
+    else onSuccess();
+  }
+
+  return (
+    <Sheet title={mode === "signIn" ? "Sign in" : "Create account"} subtitle="Your account keeps your sessions available on your devices." onClose={onClose}>
+      <form onSubmit={submit} className="mt-4 space-y-3">
+        {mode === "signUp" && <TextInput label="Name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" />}
+        <TextInput label="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" required />
+        <TextInput label="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="At least 8 characters" required minLength={8} />
+        {error && <p className="text-sm text-red-700">{error}</p>}
+        <CapsuleButton type="submit" disabled={busy} className="w-full">{busy ? "Please wait" : mode === "signIn" ? "Sign in" : "Create account"}</CapsuleButton>
+      </form>
+      <button type="button" onClick={() => setMode(mode === "signIn" ? "signUp" : "signIn")} className="mt-4 w-full text-center text-xs text-foreground-muted hover:text-foreground">
+        {mode === "signIn" ? "Need an account? Create one" : "Already have an account? Sign in"}
+      </button>
     </Sheet>
   );
 }
