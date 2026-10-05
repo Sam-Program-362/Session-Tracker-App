@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, useMemo } from "react";
+import { registerServiceWorkerOnce } from "@/lib/sw-registration";
 import {
   listCategories,
   saveSession,
@@ -8,6 +9,7 @@ import {
   getSettings,
   saveSettings,
   pruneSessionsOlderThan,
+  seedDefaultCategories,
   addCategory as dbAddCategory,
   listTasks,
   saveTask,
@@ -63,7 +65,7 @@ export default function Home() {
       listSessions(),
       getSettings(),
     ]);
-    setCategories(cats);
+    setCategories(cats.filter((c) => !c.deleted));
     setLogs(allLogs);
     setRetention(settings.retentionMonths);
   }, []);
@@ -73,16 +75,22 @@ export default function Home() {
     let alive = true;
     void (async () => {
       const settings = await getSettings();
+      await seedDefaultCategories(generateId);
       await pruneSessionsOlderThan(settings.retentionMonths);
       const [cats, allLogs] = await Promise.all([listCategories(), listSessions()]);
       if (!alive) return;
       setRetention(settings.retentionMonths);
-      setCategories(cats);
+      setCategories(cats.filter((c) => !c.deleted));
       setLogs(allLogs);
     })();
     return () => {
       alive = false;
     };
+  }, []);
+
+  // Register the service worker once the component hydrates on the client.
+  useEffect(() => {
+    registerServiceWorkerOnce();
   }, []);
 
   // Re-attach to a session that was left running (app closed / phone locked).
@@ -136,6 +144,21 @@ export default function Home() {
     [runningSession, reload],
   );
 
+  // "Switch to Other" ends this session and opens the category picker.
+  const switchCategory = useCallback(async () => {
+    if (runningSession) {
+      await saveSession({
+        ...runningSession,
+        status: "stopped",
+        endedAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+    }
+    await reload();
+    setDir("back");
+    setScreen("categories");
+  }, [runningSession, reload]);
+
   const changeRetention = useCallback(
     async (months: Retention) => {
       setRetention(months);
@@ -176,7 +199,7 @@ export default function Home() {
             log={runningSession}
             category={categories.find((c) => c.id === runningSession.categoryId)}
             onClose={endSession}
-            onSwitch={() => endSession("")}
+            onSwitch={switchCategory}
           />
         )}
 

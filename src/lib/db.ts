@@ -1,4 +1,5 @@
 import type { Category, SessionLog, Retention, CategoryTask } from "./types";
+import { ICONS } from "./icons";
 
 const DB_NAME = "session-tracker";
 const STORE_CATEGORIES = "categories";
@@ -57,6 +58,37 @@ export function listCategories(): Promise<Category[]> {
   return runInTransaction(STORE_CATEGORIES, "readonly", (store) => {
     return store.getAll() as IDBRequest<Category[]>;
   });
+}
+
+/**
+ * The four categories the app ships with. They are ordinary records in the
+ * same store as anything the user adds, so they behave identically.
+ */
+export const DEFAULT_CATEGORIES: ReadonlyArray<
+  Pick<Category, "name" | "icon" | "color">
+> = [
+  { name: "Work", icon: ICONS.work, color: "#24292e" },
+  { name: "Study", icon: ICONS.study, color: "#1f6feb" },
+  { name: "Hobby", icon: ICONS.hobby, color: "#0b8b5f" },
+  { name: "Ideas", icon: ICONS.ideas, color: "#6366f1" },
+];
+
+/** Seed the built-in categories the first time the app runs. */
+export async function seedDefaultCategories(newId: () => string): Promise<void> {
+  const existing = (await listCategories()).filter((c) => !c.deleted);
+  if (existing.length > 0) return;
+  const now = Date.now();
+  for (const c of DEFAULT_CATEGORIES) {
+    await addCategory({
+      id: newId(),
+      name: c.name,
+      icon: c.icon,
+      color: c.color,
+      createdAt: now,
+      updatedAt: now,
+      deleted: false,
+    });
+  }
 }
 
 export function getCategory(id: string): Promise<Category | undefined> {
