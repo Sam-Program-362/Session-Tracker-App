@@ -1,0 +1,225 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   Session Tracker design tokens
+   Light slate background, dark slate pills, soft shadows, Inter.
+--------------------------------------------------------------------------- */
+
+:root {
+  --background: #f8f9fa;
+  --background-tertiary: #edf2f7;
+  --foreground: #1f2933;
+  --foreground-muted: #5b6774;
+  --foreground-faint: #9aa5b1;
+
+  --color-primary: #24292e;
+  --color-primary-hover: #1a1e22;
+
+  --shadow-soft: 0 1px 2px rgba(36, 41, 46, 0.04), 0 4px 12px rgba(36, 41, 46, 0.06);
+  --shadow-glow: 0 0 0 4px rgba(36, 41, 46, 0.035), 0 8px 28px rgba(36, 41, 46, 0.1);
+}
+
+@theme inline {
+  --font-sans: var(--font-inter), system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-foreground-muted: var(--foreground-muted);
+  --color-foreground-faint: var(--foreground-faint);
+
+  --color-primary: var(--color-primary);
+  --color-primary-hover: var(--color-primary-hover);
+  --color-border: #e2e8f0;
+  --color-input: #dfe4ea;
+  --color-ring: #24292e;
+
+  --shadow-soft: var(--shadow-soft);
+  --shadow-glow: var(--shadow-glow);
+}
+
+html,
+body {
+  height: 100%;
+  font-family: var(--font-inter), system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+body {
+  margin: 0;
+  background: linear-gradient(180deg, #f8f9fa 0%, #edf2f7 100%);
+  background-attachment: fixed;
+  color: var(--foreground);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+  text-rendering: optimizeLegibility;
+}
+
+/* --------------------------------------------------------------------------
+   Motion
+-------------------------------------------------------------------------- */
+
+@keyframes stt-forward {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes stt-back {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes stt-sheet-up {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.screen-forward {
+  animation: stt-forward 280ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.screen-back {
+  animation: stt-back 280ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+[class*="animate-[slideUp"] {
+  animation: stt-sheet-up 240ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .screen-forward,
+  .screen-back,
+  [class*="animate-[slideUp"],
+  .capsule-button,
+  .task-checkbox {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Capsule buttons — press-down feedback
+-------------------------------------------------------------------------- */
+
+.capsule-button {
+  position: relative;
+  overflow: hidden;
+  transition:
+    transform 120ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    background-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.capsule-button:active:not(:disabled) {
+  transform: scale(0.965);
+}
+
+.capsule-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* --------------------------------------------------------------------------
+   Scrollable log list
+-------------------------------------------------------------------------- */
+
+.scroll-logs {
+  scrollbar-width: thin;
+  scrollbar-color: #cfd6de transparent;
+}
+
+.scroll-logs::-webkit-scrollbar {
+  width: 6px;
+}
+
+.scroll-logs::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scroll-logs::-webkit-scrollbar-thumb {
+  background: #cfd6de;
+  border-radius: 999px;
+}
+
+/* --------------------------------------------------------------------------
+   Category task checkbox
+-------------------------------------------------------------------------- */
+
+.task-checkbox {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border: 2px solid #cfd6de;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease;
+}
+
+.task-checkbox svg {
+  opacity: 0;
+  transform: scale(0.5);
+  transition:
+    opacity 130ms ease,
+    transform 130ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.task-checkbox.checked {
+  background-color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.task-checkbox.checked svg {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* --------------------------------------------------------------------------
+   Color swatch input
+-------------------------------------------------------------------------- */
+
+input[type="color"] {
+  -webkit-appearance: none;
+  appearance: none;
+  padding: 2px;
+  border: 1px solid var(--color-input);
+  border-radius: 12px;
+  background: #fff;
+}
+
+input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+input[type="color"]::-webkit-color-swatch {
+  border: none;
+  border-radius: 10px;
+}
+
+input[type="color"]::-moz-color-swatch {
+  border: none;
+  border-radius: 10px;
+}
