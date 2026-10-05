@@ -58,12 +58,9 @@ export const sessions = pgTable("sessions", {
 
 export const user = pgTable("user", {
   id: uuid("id").primaryKey().defaultRandom(),
-  name: text("name"),
+  name: text("name").notNull(),
   email: text("email").notNull().unique(),
-  emailVerified: timestamp("emailVerified", {
-    precision: 3,
-    mode: "string",
-  }),
+  emailVerified: boolean("emailVerified").notNull().default(false),
   image: text("image"),
   createdAt: timestamp("createdAt", { precision: 3, mode: "string" })
     .notNull()
@@ -81,6 +78,8 @@ export const session = pgTable("session", {
   token: text("token").notNull().unique(),
   expiresAt: timestamp("expiresAt", { precision: 3, mode: "string" })
     .notNull(),
+  ipAddress: text("ipAddress"),
+  userAgent: text("userAgent"),
   createdAt: timestamp("createdAt", { precision: 3, mode: "string" })
     .notNull()
     .default(sql`now()`),
@@ -98,6 +97,7 @@ export const account = pgTable("account", {
   providerId: text("providerId").notNull(),
   accessToken: text("accessToken"),
   refreshToken: text("refreshToken"),
+  idToken: text("idToken"),
   accessTokenExpiresAt: timestamp("accessTokenExpiresAt", {
     precision: 3,
     mode: "string",
