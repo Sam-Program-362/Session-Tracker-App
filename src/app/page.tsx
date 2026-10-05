@@ -17,7 +17,8 @@ import {
 } from "@/lib/db";
 import { generateId } from "@/lib/ids";
 import { ICONS, PICKABLE_ICONS, type IconName } from "@/lib/icons";
-import { CapsuleButton, TextInput } from "@/components";
+import { CapsuleButton, TextInput, AuthForm } from "@/components";
+import { resolveSignedIn } from "@/lib/auth-client";
 import {
   formatDuration,
   formatTime12,
@@ -58,6 +59,8 @@ export default function Home() {
   const [retention, setRetention] = useState<Retention>(1);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [dir, setDir] = useState<"back" | "forward">("forward");
+  // null while we are still finding out whether this device is signed in.
+  const [signedIn, setSignedIn] = useState<boolean | null>(null);
 
   const reload = useCallback(async () => {
     const [cats, allLogs, settings] = await Promise.all([
@@ -92,6 +95,24 @@ export default function Home() {
   useEffect(() => {
     registerServiceWorkerOnce();
   }, []);
+
+  // Resolve the session once on open. Online it refreshes from the cookie,
+  // offline it falls back to the flag cached on the device, so a signed-in
+  // user goes straight into the app either way.
+  useEffect(() => {
+    let alive = true;
+    void resolveSignedIn().then((result) => {
+      if (alive) setSignedIn(result);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Enter the app directly once signed in.
+  useEffect(() => {
+    if (signedIn) setScreen("categories");
+  }, [signedIn]);
 
   // Re-attach to a session that was left running (app closed / phone locked).
   const runningSession = useMemo(
@@ -180,7 +201,10 @@ export default function Home() {
       <div key={visibleScreen} className={`flex min-h-0 flex-1 flex-col screen-${dir}`}>
         {visibleScreen === "login" && (
           <LoginScreen
-            onLogIn={() => go("categories")}
+            onLoggedIn={() => {
+              setSignedIn(true);
+              go("categories");
+            }}
             onOpenLogs={() => go("logs")}
           />
         )}
@@ -242,37 +266,52 @@ export default function Home() {
 // ---------------------------------------------------------------------------
 
 function LoginScreen({
-  onLogIn,
+  onLoggedIn,
   onOpenLogs,
 }: {
-  onLogIn: () => void;
+  onLoggedIn: () => void;
   onOpenLogs: () => void;
 }) {
-  return (
-    <main className="flex flex-1 flex-col items-center justify-center px-6 safe-area-bottom">
-      <div className="w-full max-w-sm">
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-foreground-muted">
-          Session Tracker
-        </p>
-        <h1 className="mt-3 text-3xl font-bold leading-tight tracking-tight">
-          Time, kept where you keep it.
-        </h1>
-        <p className="mt-3 text-sm leading-relaxed text-foreground-muted">
-          Start a stopwatch for Work, Study, Hobby or Ideas. Everything stays on
-          this device.
-        </p>
+  // The LOG IN pill reveals the real sign in / create account form.
+  const [formOpen, setFormOpen] = useState(false);
 
-        <div className="mt-9 flex justify-center">
-          <CapsuleButton size="lg" onClick={onLogIn} className="w-48">
-            LOG IN
-          </CapsuleButton>
+  return (
+    <main className="flex flex-1 flex-col safe-area-bottom">
+      <div className="flex-1 overflow-y-auto px-6">
+        <div className="mx-auto w-full max-w-sm py-12">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-foreground-muted">
+            Session Tracker
+          </p>
+          <h1 className="mt-3 text-3xl font-bold leading-tight tracking-tight">
+            Time, kept where you keep it.
+          </h1>
+          <p className="mt-3 text-sm leading-relaxed text-foreground-muted">
+            Start a stopwatch for Work, Study, Hobby or Ideas. Sign in once and
+            this device stays signed in.
+          </p>
+
+          {formOpen ? (
+            <AuthForm onDone={onLoggedIn} />
+          ) : (
+            <div className="mt-9 flex justify-center">
+              <CapsuleButton
+                size="lg"
+                onClick={() => setFormOpen(true)}
+                className="w-48"
+              >
+                LOG IN
+              </CapsuleButton>
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="w-full max-w-sm px-6 pb-10 safe-area-bottom">
-        <CapsuleButton variant="ghost" onClick={onOpenLogs} className="w-full">
-          Session&apos;s Logs
-        </CapsuleButton>
+      <div className="w-full px-6 pb-10 safe-area-bottom">
+        <div className="mx-auto w-full max-w-sm">
+          <CapsuleButton variant="ghost" onClick={onOpenLogs} className="w-full">
+            Session&apos;s Logs
+          </CapsuleButton>
+        </div>
       </div>
     </main>
   );
