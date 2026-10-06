@@ -1,6 +1,6 @@
 CREATE TABLE "account" (
-	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-	"userId" uuid NOT NULL,
+	"id" text PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
 	"accountId" text NOT NULL,
 	"providerId" text NOT NULL,
 	"accessToken" text,
@@ -15,8 +15,8 @@ CREATE TABLE "account" (
 );
 --> statement-breakpoint
 CREATE TABLE "categories" (
-	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-	"userId" uuid NOT NULL,
+	"id" text PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
 	"name" text NOT NULL,
 	"icon" text NOT NULL,
 	"color" text NOT NULL,
@@ -26,8 +26,8 @@ CREATE TABLE "categories" (
 );
 --> statement-breakpoint
 CREATE TABLE "session" (
-	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-	"userId" uuid NOT NULL,
+	"id" text PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
 	"token" text NOT NULL,
 	"expiresAt" timestamp(3) NOT NULL,
 	"ipAddress" text,
@@ -38,8 +38,8 @@ CREATE TABLE "session" (
 );
 --> statement-breakpoint
 CREATE TABLE "sessions" (
-	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-	"userId" uuid NOT NULL,
+	"id" text PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
 	"categoryId" uuid NOT NULL,
 	"categoryName" text NOT NULL,
 	"status" text NOT NULL,
@@ -53,7 +53,7 @@ CREATE TABLE "sessions" (
 );
 --> statement-breakpoint
 CREATE TABLE "user" (
-	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"id" text PRIMARY KEY NOT NULL,
 	"name" text NOT NULL,
 	"email" text NOT NULL,
 	"emailVerified" boolean DEFAULT false NOT NULL,
@@ -64,7 +64,7 @@ CREATE TABLE "user" (
 );
 --> statement-breakpoint
 CREATE TABLE "verification" (
-	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"id" text PRIMARY KEY NOT NULL,
 	"identifier" text NOT NULL,
 	"value" text NOT NULL,
 	"expiresAt" timestamp(3) NOT NULL,
