@@ -29,7 +29,7 @@ export const sessions = pgTable("sessions", {
   id: text("id").primaryKey(),
   userId: text("userId").notNull(),
 
-  categoryId: uuid("categoryId").notNull(),
+  categoryId: text("categoryId").notNull(),
   categoryName: text("categoryName").notNull(),
 
   status: text("status").notNull(), // "running" | "stopped"

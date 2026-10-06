@@ -40,7 +40,7 @@ CREATE TABLE "session" (
 CREATE TABLE "sessions" (
 	"id" text PRIMARY KEY NOT NULL,
 	"userId" text NOT NULL,
-	"categoryId" uuid NOT NULL,
+	"categoryId" text NOT NULL,
 	"categoryName" text NOT NULL,
 	"status" text NOT NULL,
 	"startedAt" timestamp(3) NOT NULL,
