@@ -7,6 +7,7 @@
 import { createAuthClient } from "better-auth/react";
 
 const CACHE_KEY = "session-tracker:signed-in";
+const USER_ID_KEY = "session-tracker:user-id";
 
 let client: ReturnType<typeof createAuthClient> | null = null;
 
@@ -33,6 +34,43 @@ export function isCachedSignedIn(): boolean {
     return window.localStorage.getItem(CACHE_KEY) === "1";
   } catch {
     return false;
+  }
+}
+
+/** Remember which account owns this device, so it works offline too. */
+function setCachedUserId(id: string | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (id) window.localStorage.setItem(USER_ID_KEY, id);
+    else window.localStorage.removeItem(USER_ID_KEY);
+  } catch {
+    // A private-mode browser may refuse localStorage; the id is then only
+    // available while online, which is enough to claim records.
+  }
+}
+
+/** The account id remembered on this device (null before the first sign-in). */
+export function getCachedUserId(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(USER_ID_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The signed-in user's id. Online it comes from the session cookie and is
+ * cached; offline it falls back to the id remembered on this device.
+ */
+export async function getSignedInUserId(): Promise<string | null> {
+  try {
+    const { data } = await getClient().getSession();
+    const id = data?.user?.id ?? null;
+    setCachedUserId(id);
+    return id;
+  } catch {
+    return getCachedUserId();
   }
 }
 
@@ -109,9 +147,10 @@ export async function signUp(
 export async function resolveSignedIn(): Promise<boolean> {
   try {
     const { data } = await getClient().getSession();
-    const signedIn = Boolean(data?.user?.id);
-    setCachedSignedIn(signedIn);
-    return signedIn;
+    const id = data?.user?.id ?? null;
+    setCachedSignedIn(Boolean(id));
+    setCachedUserId(id);
+    return Boolean(id);
   } catch {
     return isCachedSignedIn();
   }

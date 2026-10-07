@@ -44,7 +44,10 @@ function runInTransaction<T>(
         const t = db.transaction(storeName, mode);
         const store = t.objectStore(storeName);
         const req = work(store);
-        req.onsuccess = () => resolve(req.result);
+        // Settle when the transaction finishes, not on a request event:
+        // several helpers return the store itself, so there is no request
+        // event to wait for and the promise would never settle.
+        t.oncomplete = () => resolve(req.result);
         req.onerror = () => reject(req.error);
         t.onabort = () => reject(t.error);
       })
@@ -57,7 +60,10 @@ function runInTransaction<T>(
 export function listCategories(): Promise<Category[]> {
   return runInTransaction(STORE_CATEGORIES, "readonly", (store) => {
     return store.getAll() as IDBRequest<Category[]>;
-  });
+  }).then((all) =>
+    // The retention setting lives in this store too; it is not a category.
+    all.filter((c) => c.id !== CATEGORY_KEY)
+  );
 }
 
 /**
@@ -65,22 +71,38 @@ export function listCategories(): Promise<Category[]> {
  * same store as anything the user adds, so they behave identically.
  */
 export const DEFAULT_CATEGORIES: ReadonlyArray<
-  Pick<Category, "name" | "icon" | "color">
+  Pick<Category, "name" | "icon" | "color"> & { slug: string }
 > = [
-  { name: "Work", icon: ICONS.work, color: "#24292e" },
-  { name: "Study", icon: ICONS.study, color: "#1f6feb" },
-  { name: "Hobby", icon: ICONS.hobby, color: "#0b8b5f" },
-  { name: "Ideas", icon: ICONS.ideas, color: "#6366f1" },
+  { slug: "work", name: "Work", icon: ICONS.work, color: "#24292e" },
+  { slug: "study", name: "Study", icon: ICONS.study, color: "#1f6feb" },
+  { slug: "hobby", name: "Hobby", icon: ICONS.hobby, color: "#0b8b5f" },
+  { slug: "ideas", name: "Ideas", icon: ICONS.ideas, color: "#6366f1" },
 ];
 
+/**
+ * The one id every device uses for a built-in category of an account:
+ * "<userId>-work". The phone and the laptop then agree on the id, so syncing
+ * can never create a second "Work" pill.
+ */
+export function defaultCategoryId(userId: string, slug: string): string {
+  return `${userId}-${slug}`;
+}
+
 /** Seed the built-in categories the first time the app runs. */
-export async function seedDefaultCategories(newId: () => string): Promise<void> {
+export async function seedDefaultCategories(
+  newId: () => string,
+  userId: string | null = null
+): Promise<void> {
   const existing = (await listCategories()).filter((c) => !c.deleted);
   if (existing.length > 0) return;
   const now = Date.now();
   for (const c of DEFAULT_CATEGORIES) {
+    // A device that already knows its account seeds the shared ids straight
+    // away; one that does not seeds random ids, renamed at first sign-in.
+    const id = userId ? defaultCategoryId(userId, c.slug) : newId();
     await addCategory({
-      id: newId(),
+      id,
+      userId,
       name: c.name,
       icon: c.icon,
       color: c.color,
@@ -179,6 +201,84 @@ export async function pruneSessionsOlderThan(months: number): Promise<void> {
   );
 }
 
+/**
+ * Claim every local record that has no owner for the given account.
+ *
+ * Data written before the first sign-in has no userId, so the first login
+ * attaches it to the person who just signed in. Returns how many records
+ * changed so the caller knows it has to redraw.
+ */
+/** Rename a record: IndexedDB keys cannot be edited in place. */
+async function renameCategory(from: string, next: Category): Promise<void> {
+  await runInTransaction(STORE_CATEGORIES, "readwrite", (store) => {
+    store.delete(from);
+    store.put(next);
+    return store as unknown as IDBRequest<void>;
+  });
+}
+
+/**
+ * Give the built-in categories their per-account id ("<userId>-work") and
+ * move every session that pointed at the old id across. Without this, a
+ * device that seeded the defaults before its first sign-in would push a
+ * second set of Work/Study/Hobby/Ideas pills into the account.
+ */
+async function adoptDefaultCategories(userId: string): Promise<number> {
+  const [cats, logs] = await Promise.all([listCategories(), listSessions()]);
+  let changed = 0;
+
+  for (const def of DEFAULT_CATEGORIES) {
+    const cat = cats.find(
+      (c) => c.name === def.name && c.icon === def.icon && c.color === def.color
+    );
+    if (!cat) continue;
+
+    const to = defaultCategoryId(userId, def.slug);
+    if (cat.id === to) continue;
+
+    const taken = cats.some((c) => c.id === to);
+    if (taken) {
+      // The shared id already exists locally: keep it and retire the copy
+      // that still carries the old random id.
+      await updateCategory({ ...cat, userId, deleted: true });
+    } else {
+      await renameCategory(cat.id, { ...cat, id: to, userId });
+    }
+    changed++;
+
+    for (const log of logs) {
+      if (log.categoryId === cat.id) {
+        await saveSession({ ...log, categoryId: to });
+        changed++;
+      }
+    }
+  }
+  return changed;
+}
+
+/**
+ * Claim every local record that has no owner for the given account.
+ *
+ * Data written before the first sign-in has no userId, so the first login
+ * attaches it to the person who just signed in. Returns how many records
+ * changed so the caller knows it has to redraw.
+ */
+export async function assignMissingUserIds(userId: string): Promise<number> {
+  let changed = await adoptDefaultCategories(userId);
+
+  const [cats, logs] = await Promise.all([listCategories(), listSessions()]);
+  const pending: Promise<void>[] = [];
+  for (const c of cats) {
+    if (!c.userId) pending.push(addCategory({ ...c, userId }));
+  }
+  for (const l of logs) {
+    if (!l.userId) pending.push(saveSession({ ...l, userId }));
+  }
+  changed += pending.length;
+  await Promise.all(pending);
+  return changed;
+}
+
 // ---------------------------- Tasks ----------------------------
 
 export function listTasks(): Promise<CategoryTask[]> {
@@ -212,17 +312,23 @@ export function toggleTaskDone(id: string): Promise<void> {
 // ---------------------------- Settings (retention) ----------------------------
 
 export function getSettings(): Promise<{ retentionMonths: Retention }> {
-  return runInTransaction(STORE_CATEGORIES, "readonly", (store) => {
-    const req = store.get(CATEGORY_KEY);
-    return req as unknown as IDBRequest<{ retentionMonths: Retention }>;
-  });
+  return runInTransaction(
+    STORE_CATEGORIES,
+    "readonly",
+    (store) =>
+      store.get(CATEGORY_KEY) as IDBRequest<
+        { retentionMonths: Retention } | undefined
+      >
+  ).then((value) => value ?? { retentionMonths: 1 });
 }
 
 export function saveSettings(
   value: { retentionMonths: Retention }
 ): Promise<void> {
   return runInTransaction(STORE_CATEGORIES, "readwrite", (store) => {
-    store.put(value, CATEGORY_KEY);
+    // This store keys on "id", so the settings record carries its key as a
+    // field: put(value, key) is rejected on a keyPath store.
+    store.put({ ...value, id: CATEGORY_KEY });
     return store as unknown as IDBRequest<void>;
   });
 }

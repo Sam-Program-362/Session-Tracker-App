@@ -11,6 +11,7 @@ import {
   pruneSessionsOlderThan,
   seedDefaultCategories,
   addCategory as dbAddCategory,
+  assignMissingUserIds,
   listTasks,
   saveTask,
   toggleTaskDone,
@@ -18,7 +19,12 @@ import {
 import { generateId } from "@/lib/ids";
 import { ICONS, PICKABLE_ICONS, type IconName } from "@/lib/icons";
 import { CapsuleButton, TextInput, AuthForm } from "@/components";
-import { resolveSignedIn } from "@/lib/auth-client";
+import {
+  resolveSignedIn,
+  getSignedInUserId,
+  getCachedUserId,
+} from "@/lib/auth-client";
+import { syncNow } from "@/lib/sync";
 import {
   formatDuration,
   formatTime12,
@@ -61,6 +67,10 @@ export default function Home() {
   const [dir, setDir] = useState<"back" | "forward">("forward");
   // null while we are still finding out whether this device is signed in.
   const [signedIn, setSignedIn] = useState<boolean | null>(null);
+  // The Better Auth account that owns every record created on this device.
+  const [userId, setUserId] = useState<string | null>(null);
+  // Plain-text sync status for Settings; Step 4 renders it.
+  const [syncStatus, setSyncStatus] = useState<"synced" | "waiting">("waiting");
 
   const reload = useCallback(async () => {
     const [cats, allLogs, settings] = await Promise.all([
@@ -78,7 +88,8 @@ export default function Home() {
     let alive = true;
     void (async () => {
       const settings = await getSettings();
-      await seedDefaultCategories(generateId);
+      // A device that already knows its account seeds the shared ids.
+      await seedDefaultCategories(generateId, getCachedUserId());
       await pruneSessionsOlderThan(settings.retentionMonths);
       const [cats, allLogs] = await Promise.all([listCategories(), listSessions()]);
       if (!alive) return;
@@ -96,18 +107,54 @@ export default function Home() {
     registerServiceWorkerOnce();
   }, []);
 
+  // Claim the local records for the signed-in account: remember who this
+  // device belongs to, and attach anything created before the first sign-in.
+  const adoptUser = useCallback(async () => {
+    const uid = await getSignedInUserId();
+    if (!uid) return;
+    setUserId(uid);
+    const claimed = await assignMissingUserIds(uid);
+    if (claimed > 0) await reload();
+  }, [reload]);
+
   // Resolve the session once on open. Online it refreshes from the cookie,
   // offline it falls back to the flag cached on the device, so a signed-in
   // user goes straight into the app either way.
   useEffect(() => {
     let alive = true;
-    void resolveSignedIn().then((result) => {
-      if (alive) setSignedIn(result);
-    });
+    void (async () => {
+      const result = await resolveSignedIn();
+      if (!alive) return;
+      setSignedIn(result);
+      if (result) await adoptUser();
+    })();
     return () => {
       alive = false;
     };
-  }, []);
+  }, [adoptUser]);
+
+  // Fire-and-forget: no screen ever waits on the network. When a sync lands
+  // we redraw so anything the server held shows up straight away.
+  const triggerSync = useCallback(() => {
+    void (async () => {
+      const outcome = await syncNow();
+      setSyncStatus(outcome.ok ? "synced" : "waiting");
+      if (outcome.ok) await reload();
+    })();
+  }, [reload]);
+
+  // Sync when the app opens, and again the moment the browser is back online.
+  useEffect(() => {
+    triggerSync();
+    const onOnline = () => triggerSync();
+    const onOffline = () => setSyncStatus("waiting");
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+    };
+  }, [triggerSync]);
 
   // Enter the app directly once signed in.
   useEffect(() => {
@@ -130,6 +177,7 @@ export default function Home() {
       const now = Date.now();
       await saveSession({
         id: generateId(),
+        userId,
         categoryId: category.id,
         categoryName: category.name,
         status: "running",
@@ -144,8 +192,9 @@ export default function Home() {
       await reload();
       setDir("forward");
       setScreen("running");
+      triggerSync();
     },
-    [reload],
+    [reload, userId, triggerSync],
   );
 
   const endSession = useCallback(
@@ -161,8 +210,9 @@ export default function Home() {
       await reload();
       setDir("back");
       setScreen("logs");
+      triggerSync();
     },
-    [runningSession, reload],
+    [runningSession, reload, triggerSync],
   );
 
   // "Switch to Other" ends this session and opens the category picker.
@@ -178,7 +228,8 @@ export default function Home() {
     await reload();
     setDir("back");
     setScreen("categories");
-  }, [runningSession, reload]);
+    triggerSync();
+  }, [runningSession, reload, triggerSync]);
 
   const changeRetention = useCallback(
     async (months: Retention) => {
@@ -186,8 +237,9 @@ export default function Home() {
       await saveSettings({ retentionMonths: months });
       await pruneSessionsOlderThan(months);
       await reload();
+      triggerSync();
     },
-    [reload],
+    [reload, triggerSync],
   );
 
   const activeLogs = useMemo(() => logs.filter((l) => !l.deleted), [logs]);
@@ -204,6 +256,7 @@ export default function Home() {
             onLoggedIn={() => {
               setSignedIn(true);
               go("categories");
+              void adoptUser();
             }}
             onOpenLogs={() => go("logs")}
           />
@@ -232,6 +285,7 @@ export default function Home() {
             logs={activeLogs}
             categories={categories}
             retentionMonths={retention}
+            syncStatus={syncStatus}
             onSetRetention={changeRetention}
             onSelectCategory={startSession}
             onBack={() => go("login", "back")}
@@ -245,6 +299,7 @@ export default function Home() {
           onSave={async (name, icon, color) => {
             await dbAddCategory({
               id: generateId(),
+              userId,
               name: name.trim(),
               icon,
               color,
@@ -254,6 +309,7 @@ export default function Home() {
             });
             setSheetOpen(false);
             await reload();
+            triggerSync();
           }}
         />
       )}
@@ -551,6 +607,7 @@ function LogsScreen({
   logs,
   categories,
   retentionMonths,
+  syncStatus,
   onSetRetention,
   onSelectCategory,
   onBack,
@@ -558,6 +615,7 @@ function LogsScreen({
   logs: SessionLog[];
   categories: Category[];
   retentionMonths: Retention;
+  syncStatus: "synced" | "waiting";
   onSetRetention: (n: Retention) => void;
   onSelectCategory: (c: Category) => void;
   onBack: () => void;
@@ -629,6 +687,10 @@ function LogsScreen({
             ))}
           </div>
         </div>
+
+        <p className="mt-3 text-xs text-foreground-muted">
+          {syncStatus === "synced" ? "Synced" : "Waiting for internet"}
+        </p>
       </div>
     </div>
   );

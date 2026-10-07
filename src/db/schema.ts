@@ -21,6 +21,11 @@ export const categories = pgTable("categories", {
   updatedAt: timestamp("updatedAt", { precision: 3, mode: "string" })
     .notNull()
     .default(sql`now()`),
+  // When the database last changed the row. Devices pull on this, so a
+  // record can never be missed because a device clock is wrong.
+  serverUpdatedAt: timestamp("serverUpdatedAt", { precision: 3, mode: "string" })
+    .notNull()
+    .default(sql`now()`),
 
   deleted: boolean("deleted").notNull().default(false),
 });
@@ -44,6 +49,11 @@ export const sessions = pgTable("sessions", {
     .notNull()
     .default(sql`now()`),
   updatedAt: timestamp("updatedAt", { precision: 3, mode: "string" })
+    .notNull()
+    .default(sql`now()`),
+  // When the database last changed the row. Devices pull on this, so a
+  // record can never be missed because a device clock is wrong.
+  serverUpdatedAt: timestamp("serverUpdatedAt", { precision: 3, mode: "string" })
     .notNull()
     .default(sql`now()`),
 

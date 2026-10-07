@@ -6,6 +6,8 @@
 
 export type Category = {
   id: string;
+  /** Better Auth account that owns this record; null until the first sign-in. */
+  userId: string | null;
   name: string;
   /** SVG path data drawn inside a 24x24 viewBox. */
   icon: string;
@@ -19,6 +21,8 @@ export type SessionStatus = "running" | "stopped";
 
 export type SessionLog = {
   id: string;
+  /** Better Auth account that owns this record; null until the first sign-in. */
+  userId: string | null;
   categoryId: string;
   categoryName: string;
   status: SessionStatus;

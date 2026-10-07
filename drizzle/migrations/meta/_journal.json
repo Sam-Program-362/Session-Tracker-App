@@ -8,6 +8,13 @@
       "when": 1791283682732,
       "tag": "0000_abnormal_the_liberteens",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791368156281,
+      "tag": "0001_smart_rhino",
+      "breakpoints": true
     }
   ]
 }

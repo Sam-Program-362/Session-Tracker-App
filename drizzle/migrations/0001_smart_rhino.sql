@@ -1,0 +1,2 @@
+ALTER TABLE "categories" ADD COLUMN "serverUpdatedAt" timestamp(3) DEFAULT now() NOT NULL;--> statement-breakpoint
+ALTER TABLE "sessions" ADD COLUMN "serverUpdatedAt" timestamp(3) DEFAULT now() NOT NULL;
