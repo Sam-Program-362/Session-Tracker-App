@@ -44,6 +44,9 @@ import {
   formatTime12,
   formatDateShort,
   formatDayName,
+  startOfLocalDay,
+  localDayKey,
+  relativeDayLabel,
 } from "@/lib/format";
 import type {
   Category,
@@ -959,6 +962,8 @@ function LogsScreen({
 
 type DayGroup = {
   key: string;
+  /** Local midnight of the day this block covers. */
+  dayStart: number;
   label: string;
   dateLabel: string;
   logs: SessionLog[];
@@ -1538,39 +1543,34 @@ function CategorySheet({
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Group session logs into day blocks, newest day first. */
+/**
+ * Group session logs into the DEVICE's local calendar days, newest day first.
+ *
+ * Day identity, the label and the printed date all come from the same local
+ * day start, so a block can never say "Today" over another day's date.
+ */
 function groupByDay(logs: SessionLog[], now: number): DayGroup[] {
-  const buckets = new Map<string, SessionLog[]>();
+  const buckets = new Map<string, { dayStart: number; logs: SessionLog[] }>();
 
   for (const log of logs) {
-    const d = new Date(log.startedAt);
-    const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-    const list = buckets.get(key);
-    if (list) list.push(log);
-    else buckets.set(key, [log]);
+    const key = localDayKey(log.startedAt);
+    const bucket = buckets.get(key);
+    if (bucket) bucket.logs.push(log);
+    else buckets.set(key, { dayStart: startOfLocalDay(log.startedAt), logs: [log] });
   }
 
   return Array.from(buckets.entries())
-    .map(([key, items]) => {
-      items.sort((a, b) => a.startedAt - b.startedAt);
-      const startOfDay = new Date(items[0].startedAt);
-      startOfDay.setHours(0, 0, 0, 0);
+    .map(([key, bucket]) => {
+      bucket.logs.sort((a, b) => a.startedAt - b.startedAt);
       return {
         key,
-        label: relativeDayLabel(startOfDay.getTime(), now),
-        dateLabel: `${formatDayName(items[0].startedAt)} ${formatDateShort(items[0].startedAt)}`,
-        logs: items,
+        dayStart: bucket.dayStart,
+        label: relativeDayLabel(bucket.dayStart, now),
+        dateLabel: `${formatDayName(bucket.dayStart)} ${formatDateShort(bucket.dayStart)}`,
+        logs: bucket.logs,
       };
     })
-    .sort((a, b) => Number(b.key) - Number(a.key) || a.logs[0].startedAt - b.logs[0].startedAt)
-    .sort((a, b) => (a.key < b.key ? 1 : -1));
-}
-
-function relativeDayLabel(startOfDay: number, now: number): string {
-  const today = new Date(now);
-  today.setHours(0, 0, 0, 0);
-  const days = Math.round((today.getTime() - startOfDay) / 86_400_000);
-  if (days <= 0) return "Today";
-  if (days === 1) return "Yesterday";
-  return `${days} days ago`;
+    // Newest day first: an explicit number, never a string comparison of an
+    // unpadded key (which put Oct 6 above Oct 30, and Jan above Dec).
+    .sort((a, b) => b.dayStart - a.dayStart);
 }
