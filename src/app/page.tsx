@@ -24,9 +24,11 @@ import {
   ICONS,
   CATEGORY_ICON_NAMES,
   CATEGORY_ICONS,
+  DEFAULT_CATEGORY_ICON,
   emojiIconValue,
   parseCategoryIcon,
   toEmojiIconValue,
+  type ParsedCategoryIcon,
 } from "@/lib/icons";
 import { CapsuleButton, TextInput, AuthForm, CategoryIcon } from "@/components";
 import {
@@ -425,6 +427,7 @@ export default function Home() {
 
       {editingCategory && (
         <CategorySheet
+          key={editingCategory.id}
           category={editingCategory}
           onClose={() => setEditingCategory(null)}
           onSave={async (name, icon, color) => {
@@ -1365,7 +1368,11 @@ function CategorySheet({
   onDelete?: () => Promise<void>;
   onClose: () => void;
 }) {
-  const initialIcon = parseCategoryIcon(category?.icon);
+  // An existing category opens on the picture it already has; a new one starts
+  // on the default icon (never on the "unrecognised value" fallback).
+  const initialIcon: ParsedCategoryIcon = category
+    ? parseCategoryIcon(category.icon)
+    : { kind: "icon", name: DEFAULT_CATEGORY_ICON };
   const [name, setName] = useState(category?.name ?? "");
   // Either an icon name ("briefcase") or a stored emoji ("emoji:🎨") — the
   // same string the record keeps, so nothing has to be translated on save.

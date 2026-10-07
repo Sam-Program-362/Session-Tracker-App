@@ -83,7 +83,7 @@ export function legacyCategoryIconName(value: string): CategoryIconName | null {
 /** An emoji is stored in the same icon field, behind this flag. */
 const EMOJI_PREFIX = "emoji:";
 
-export type CategoryIcon =
+export type ParsedCategoryIcon =
   | { kind: "icon"; name: CategoryIconName }
   | { kind: "emoji"; emoji: string };
 
@@ -98,7 +98,9 @@ export function emojiIconValue(emoji: string): string {
  * Unknown values (and a missing one) fall back to a clock rather than drawing
  * nothing, so a category can never be left without a picture.
  */
-export function parseCategoryIcon(value: string | null | undefined): CategoryIcon {
+export function parseCategoryIcon(
+  value: string | null | undefined
+): ParsedCategoryIcon {
   const raw = (value ?? "").trim();
 
   if (raw.startsWith(EMOJI_PREFIX)) {
