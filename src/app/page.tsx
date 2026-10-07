@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, useMemo } from "react";
+import { ChevronRight, Pencil } from "lucide-react";
 import { registerServiceWorkerOnce } from "@/lib/sw-registration";
 import {
   listCategories,
@@ -11,6 +12,7 @@ import {
   pruneSessionsOlderThan,
   seedDefaultCategories,
   addCategory as dbAddCategory,
+  updateCategory,
   assignMissingUserIds,
   listTasks,
   saveTask,
@@ -18,8 +20,15 @@ import {
   clearAllLocalData,
 } from "@/lib/db";
 import { generateId } from "@/lib/ids";
-import { ICONS, PICKABLE_ICONS, type IconName } from "@/lib/icons";
-import { CapsuleButton, TextInput, AuthForm } from "@/components";
+import {
+  ICONS,
+  CATEGORY_ICON_NAMES,
+  CATEGORY_ICONS,
+  emojiIconValue,
+  parseCategoryIcon,
+  toEmojiIconValue,
+} from "@/lib/icons";
+import { CapsuleButton, TextInput, AuthForm, CategoryIcon } from "@/components";
 import {
   verifySession,
   hasSignedInBefore,
@@ -66,9 +75,13 @@ function useTicker(intervalMs: number): number {
 export default function Home() {
   const [screen, setScreen] = useState<Screen>("login");
   const [categories, setCategories] = useState<Category[]>([]);
+  // Every category the device still holds, deleted ones included. The logs use
+  // it so a past session keeps showing the category it was recorded under.
+  const [allCategories, setAllCategories] = useState<Category[]>([]);
   const [logs, setLogs] = useState<SessionLog[]>([]);
   const [retention, setRetention] = useState<Retention>(1);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [editingCategory, setEditingCategory] = useState<Category | null>(null);
   const [dir, setDir] = useState<"back" | "forward">("forward");
   // null while we are still finding out whether this device is signed in.
   const [signedIn, setSignedIn] = useState<boolean | null>(null);
@@ -91,6 +104,7 @@ export default function Home() {
       getSettings(),
     ]);
     setCategories(cats.filter((c) => !c.deleted));
+    setAllCategories(cats);
     setLogs(allLogs);
     setRetention(settings.retentionMonths);
   }, []);
@@ -245,9 +259,11 @@ export default function Home() {
     setSessionGone(false);
     setSyncStatus("waiting");
     setCategories([]);
+    setAllCategories([]);
     setLogs([]);
     setRetention(1);
     setSheetOpen(false);
+    setEditingCategory(null);
     go("login", "back");
     return { ok: true };
   }, [go]);
@@ -355,6 +371,7 @@ export default function Home() {
           <CategoriesScreen
             categories={categories}
             onSelect={startSession}
+            onEdit={setEditingCategory}
             onAddCategory={() => setSheetOpen(true)}
             onOpenLogs={() => go("logs", "back")}
           />
@@ -373,6 +390,7 @@ export default function Home() {
           <LogsScreen
             logs={activeLogs}
             categories={categories}
+            allCategories={allCategories}
             retentionMonths={retention}
             syncStatus={syncStatus}
             sessionGone={sessionGone}
@@ -385,7 +403,7 @@ export default function Home() {
       </div>
 
       {sheetOpen && (
-        <AddCategorySheet
+        <CategorySheet
           onClose={() => setSheetOpen(false)}
           onSave={async (name, icon, color) => {
             await dbAddCategory({
@@ -399,6 +417,39 @@ export default function Home() {
               deleted: false,
             });
             setSheetOpen(false);
+            await reload();
+            triggerSync();
+          }}
+        />
+      )}
+
+      {editingCategory && (
+        <CategorySheet
+          category={editingCategory}
+          onClose={() => setEditingCategory(null)}
+          onSave={async (name, icon, color) => {
+            // Renaming, recolouring and re-iconing one record: the update is
+            // what "newest edit wins" merges on, so it moves updatedAt.
+            await updateCategory({
+              ...editingCategory,
+              name: name.trim(),
+              icon,
+              color,
+              updatedAt: Date.now(),
+            });
+            setEditingCategory(null);
+            await reload();
+            triggerSync();
+          }}
+          onDelete={async () => {
+            // Soft delete, with a fresh updatedAt, so the removal syncs to the
+            // other devices instead of being undone by them.
+            await updateCategory({
+              ...editingCategory,
+              deleted: true,
+              updatedAt: Date.now(),
+            });
+            setEditingCategory(null);
             await reload();
             triggerSync();
           }}
@@ -485,11 +536,13 @@ function LoginScreen({
 function CategoriesScreen({
   categories,
   onSelect,
+  onEdit,
   onAddCategory,
   onOpenLogs,
 }: {
   categories: Category[];
   onSelect: (c: Category) => void;
+  onEdit: (c: Category) => void;
   onAddCategory: () => void;
   onOpenLogs: () => void;
 }) {
@@ -505,7 +558,12 @@ function CategoriesScreen({
       <div className="flex-1 overflow-y-auto px-6 pb-4">
         <div className="grid gap-3">
           {categories.map((cat) => (
-            <CategoryPill key={cat.id} category={cat} onClick={() => onSelect(cat)} />
+            <CategoryPill
+              key={cat.id}
+              category={cat}
+              onClick={() => onSelect(cat)}
+              onEdit={() => onEdit(cat)}
+            />
           ))}
         </div>
 
@@ -538,29 +596,46 @@ function CategoriesScreen({
 function CategoryPill({
   category,
   onClick,
+  onEdit,
 }: {
   category: Category;
   onClick: () => void;
+  onEdit: () => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="capsule-button flex w-full items-center gap-3.5 rounded-2xl border border-border/60 bg-white px-4 py-3.5 text-left shadow-soft transition hover:shadow-md"
-    >
-      <span
-        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full"
-        style={{ backgroundColor: `${category.color}14`, color: category.color }}
+    <div className="flex w-full items-center gap-1 rounded-2xl border border-border/60 bg-white shadow-soft transition hover:shadow-md">
+      <button
+        type="button"
+        onClick={onClick}
+        aria-label={`Start a ${category.name} session`}
+        className="capsule-button flex min-w-0 flex-1 items-center gap-3.5 rounded-2xl px-4 py-3.5 text-left"
       >
-        <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-          <path strokeLinecap="round" strokeLinejoin="round" d={category.icon} />
-        </svg>
-      </span>
-      <span className="flex-1 text-base font-semibold">{category.name}</span>
-      <svg className="h-5 w-5 shrink-0 text-foreground-faint" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-      </svg>
-    </button>
+        <span
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full"
+          style={{ backgroundColor: `${category.color}14`, color: category.color }}
+        >
+          <CategoryIcon value={category.icon} className="h-5 w-5" />
+        </span>
+        <span className="min-w-0 flex-1 truncate text-base font-semibold">
+          {category.name}
+        </span>
+      </button>
+
+      <button
+        type="button"
+        onClick={onEdit}
+        aria-label={`Edit ${category.name}`}
+        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-foreground-faint transition hover:bg-border/40 hover:text-foreground active:scale-95"
+      >
+        <Pencil className="h-4 w-4" strokeWidth={1.8} aria-hidden="true" />
+      </button>
+
+      <ChevronRight
+        className="mr-3 h-5 w-5 shrink-0 text-foreground-faint"
+        strokeWidth={2}
+        aria-hidden="true"
+      />
+    </div>
   );
 }
 
@@ -610,9 +685,7 @@ function RunningSessionScreen({
               className="flex h-8 w-8 items-center justify-center rounded-full"
               style={{ backgroundColor: `${category?.color ?? "#24292e"}14`, color: category?.color ?? "#24292e" }}
             >
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                <path strokeLinecap="round" strokeLinejoin="round" d={category?.icon ?? ICONS.clock} />
-              </svg>
+              <CategoryIcon value={category?.icon} className="h-4 w-4" />
             </span>
             <span className="text-xs font-semibold uppercase tracking-[0.18em] text-foreground-muted">
               {categoryName}
@@ -711,6 +784,7 @@ function RunningSessionScreen({
 function LogsScreen({
   logs,
   categories,
+  allCategories,
   retentionMonths,
   syncStatus,
   sessionGone,
@@ -721,6 +795,7 @@ function LogsScreen({
 }: {
   logs: SessionLog[];
   categories: Category[];
+  allCategories: Category[];
   retentionMonths: Retention;
   syncStatus: "synced" | "waiting";
   sessionGone: boolean;
@@ -783,6 +858,7 @@ function LogsScreen({
                 key={day.key}
                 day={day}
                 categories={categories}
+                allCategories={allCategories}
                 expanded={openDay === day.key}
                 now={now}
                 onToggle={() => setOpenDay(openDay === day.key ? null : day.key)}
@@ -888,6 +964,7 @@ type DayGroup = {
 function DayBlock({
   day,
   categories,
+  allCategories,
   expanded,
   now,
   onToggle,
@@ -895,6 +972,7 @@ function DayBlock({
 }: {
   day: DayGroup;
   categories: Category[];
+  allCategories: Category[];
   expanded: boolean;
   now: number;
   onToggle: () => void;
@@ -927,23 +1005,28 @@ function DayBlock({
           {/* Fixed-height scrollable session list */}
           <div className="max-h-64 space-y-1 overflow-y-auto scroll-logs pr-1">
             {day.logs.map((log) => {
-              const category = categories.find((c) => c.id === log.categoryId);
+              // Shown from every record the device still has, so a session
+              // recorded under a category that was later deleted keeps that
+              // category's name and colour instead of turning into "Category".
+              const shown = allCategories.find((c) => c.id === log.categoryId);
+              // Only a live category can be started again from a log row.
+              const startable = categories.find((c) => c.id === log.categoryId);
               return (
                 <SessionRow
                   key={log.id}
                   log={log}
-                  categoryName={category?.name ?? log.categoryName}
-                  color={category?.color ?? "#24292e"}
-                  icon={category?.icon ?? ICONS.clock}
+                  categoryName={shown?.name ?? log.categoryName}
+                  color={shown?.color ?? "#24292e"}
+                  iconValue={shown?.icon}
                   now={now}
-                  onClick={category ? () => onSelectCategory(category) : undefined}
+                  onClick={startable ? () => onSelectCategory(startable) : undefined}
                 />
               );
             })}
           </div>
 
           {/* Totals per category, directly below the box */}
-          <CategoryTotals logs={day.logs} categories={categories} now={now} />
+          <CategoryTotals logs={day.logs} categories={allCategories} now={now} />
         </div>
       ) : null}
     </div>
@@ -954,14 +1037,14 @@ function SessionRow({
   log,
   categoryName,
   color,
-  icon,
+  iconValue,
   now,
   onClick,
 }: {
   log: SessionLog;
   categoryName: string;
   color: string;
-  icon: string;
+  iconValue: string | undefined;
   now: number;
   onClick?: () => void;
 }) {
@@ -979,9 +1062,7 @@ function SessionRow({
         className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full"
         style={{ backgroundColor: `${color}14`, color }}
       >
-        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-          <path strokeLinecap="round" strokeLinejoin="round" d={icon} />
-        </svg>
+        <CategoryIcon value={iconValue} className="h-4 w-4" />
       </span>
 
       <span className="min-w-0 flex-1">
@@ -1269,19 +1350,61 @@ function SummarySheet({
   );
 }
 
-function AddCategorySheet({
+/**
+ * One sheet for both jobs: a new category, and an existing one (which can also
+ * be renamed, recoloured, re-iconed or deleted).
+ */
+function CategorySheet({
+  category,
   onSave,
+  onDelete,
   onClose,
 }: {
+  category?: Category;
   onSave: (name: string, icon: string, color: string) => Promise<void>;
+  onDelete?: () => Promise<void>;
   onClose: () => void;
 }) {
-  const [name, setName] = useState("");
-  const [iconKey, setIconKey] = useState<IconName>("work");
-  const [color, setColor] = useState("#24292e");
+  const initialIcon = parseCategoryIcon(category?.icon);
+  const [name, setName] = useState(category?.name ?? "");
+  // Either an icon name ("briefcase") or a stored emoji ("emoji:🎨") — the
+  // same string the record keeps, so nothing has to be translated on save.
+  const [iconValue, setIconValue] = useState<string>(
+    initialIcon.kind === "emoji" ? emojiIconValue(initialIcon.emoji) : initialIcon.name
+  );
+  const [emojiText, setEmojiText] = useState(
+    initialIcon.kind === "emoji" ? initialIcon.emoji : ""
+  );
+  const [color, setColor] = useState(category?.color ?? "#24292e");
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const typedEmoji = toEmojiIconValue(emojiText);
+  const editing = Boolean(category);
+
+  async function save() {
+    if (busy || !name.trim()) return;
+    setBusy(true);
+    await onSave(name.trim(), iconValue, color);
+    setBusy(false);
+  }
+
+  async function remove() {
+    if (busy || !onDelete) return;
+    setBusy(true);
+    await onDelete();
+    setBusy(false);
+  }
 
   return (
-    <Sheet title="New Category" subtitle="Saved on this device permanently." onClose={onClose}>
+    <Sheet
+      title={editing ? "Edit Category" : "New Category"}
+      subtitle={
+        editing
+          ? "Rename it, give it a new look, or delete it."
+          : "Saved on this device permanently."
+      }
+      onClose={onClose}
+    >
       <div className="mt-4 space-y-4">
         <TextInput
           label="Name"
@@ -1292,27 +1415,57 @@ function AddCategorySheet({
         />
 
         <div className="flex flex-col gap-1.5">
-          <span className="text-sm font-medium text-foreground/80">Icon</span>
+          <span className="text-sm font-medium text-foreground/80">
+            Icon or emoji
+          </span>
           <div className="flex flex-wrap gap-2">
-            {PICKABLE_ICONS.map((key) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setIconKey(key)}
-                aria-label={key}
-                aria-pressed={iconKey === key}
-                className={`flex h-11 w-11 items-center justify-center rounded-full border transition active:scale-95 ${
-                  iconKey === key
-                    ? "border-primary bg-primary text-white"
-                    : "border-border/60 bg-white text-foreground-muted"
-                }`}
-              >
-                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d={ICONS[key]} />
-                </svg>
-              </button>
-            ))}
+            {CATEGORY_ICON_NAMES.map((key) => {
+              const Icon = CATEGORY_ICONS[key];
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => {
+                    setIconValue(key);
+                    setEmojiText("");
+                  }}
+                  aria-label={key}
+                  aria-pressed={iconValue === key}
+                  className={`flex h-11 w-11 items-center justify-center rounded-full border transition active:scale-95 ${
+                    iconValue === key
+                      ? "border-primary bg-primary text-white"
+                      : "border-border/60 bg-white text-foreground-muted"
+                  }`}
+                >
+                  <Icon className="h-5 w-5" strokeWidth={1.8} />
+                </button>
+              );
+            })}
           </div>
+
+          {/* Any emoji from the phone keyboard, kept in the same icon field. */}
+          <div className="mt-1 flex items-center gap-3">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-border/60 bg-white text-xl">
+              <CategoryIcon value={iconValue} className="h-6 w-6 text-xl" />
+            </span>
+            <input
+              aria-label="Use an emoji instead of an icon"
+              value={emojiText}
+              onChange={(e) => {
+                const next = e.target.value;
+                setEmojiText(next);
+                const emoji = toEmojiIconValue(next);
+                if (emoji) setIconValue(emoji);
+              }}
+              placeholder="…or type one emoji"
+              className="min-w-0 flex-1 rounded-xl border border-input/70 bg-white px-3 py-2 text-sm shadow-sm outline-none transition focus:border-input/80 focus:ring-2 focus:ring-ring/30"
+            />
+          </div>
+          {emojiText.trim() && !typedEmoji ? (
+            <p className="text-xs text-foreground-muted">
+              One emoji, or pick an icon above.
+            </p>
+          ) : null}
         </div>
 
         <TextInput
@@ -1328,13 +1481,48 @@ function AddCategorySheet({
           Cancel
         </CapsuleButton>
         <CapsuleButton
-          onClick={() => void onSave(name, ICONS[iconKey], color)}
-          disabled={!name.trim()}
+          onClick={() => void save()}
+          disabled={!name.trim() || busy}
           className="flex-1"
         >
-          Save
+          {busy ? "Saving" : "Save"}
         </CapsuleButton>
       </div>
+
+      {onDelete ? (
+        confirmingDelete ? (
+          <div className="mt-3 rounded-xl bg-red-50 px-3 py-2.5">
+            <p className="text-xs leading-relaxed text-red-700">
+              Delete {category?.name}? The sessions you already recorded keep
+              their name and totals.
+            </p>
+            <div className="mt-2.5 flex gap-2">
+              <CapsuleButton
+                variant="ghost"
+                onClick={() => setConfirmingDelete(false)}
+                className="flex-1"
+              >
+                Keep
+              </CapsuleButton>
+              <CapsuleButton
+                onClick={() => void remove()}
+                disabled={busy}
+                className="flex-1"
+              >
+                {busy ? "Deleting" : "Delete"}
+              </CapsuleButton>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setConfirmingDelete(true)}
+            className="mt-3 w-full text-center text-xs font-medium text-red-700 transition hover:text-red-800"
+          >
+            Delete category
+          </button>
+        )
+      ) : null}
     </Sheet>
   );
 }

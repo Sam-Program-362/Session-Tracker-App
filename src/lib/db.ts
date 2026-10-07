@@ -1,5 +1,5 @@
 import type { Category, SessionLog, Retention, CategoryTask } from "./types";
-import { ICONS } from "./icons";
+import { categoryIconName } from "./icons";
 
 const DB_NAME = "session-tracker";
 const STORE_CATEGORIES = "categories";
@@ -73,10 +73,10 @@ export function listCategories(): Promise<Category[]> {
 export const DEFAULT_CATEGORIES: ReadonlyArray<
   Pick<Category, "name" | "icon" | "color"> & { slug: string }
 > = [
-  { slug: "work", name: "Work", icon: ICONS.work, color: "#24292e" },
-  { slug: "study", name: "Study", icon: ICONS.study, color: "#1f6feb" },
-  { slug: "hobby", name: "Hobby", icon: ICONS.hobby, color: "#0b8b5f" },
-  { slug: "ideas", name: "Ideas", icon: ICONS.ideas, color: "#6366f1" },
+  { slug: "work", name: "Work", icon: "briefcase", color: "#24292e" },
+  { slug: "study", name: "Study", icon: "book-open", color: "#1f6feb" },
+  { slug: "hobby", name: "Hobby", icon: "palette", color: "#0b8b5f" },
+  { slug: "ideas", name: "Ideas", icon: "lightbulb", color: "#6366f1" },
 ];
 
 /**
@@ -88,12 +88,19 @@ export function defaultCategoryId(userId: string, slug: string): string {
   return `${userId}-${slug}`;
 }
 
-/** Seed the built-in categories the first time the app runs. */
+/**
+ * Seed the built-in categories, but only on a device that has never held a
+ * category at all.
+ *
+ * Deleted records count: once every category has been deleted, the seeding
+ * code must leave the blank hub alone instead of putting the built-in four
+ * back (which would also re-upload them on the next sync).
+ */
 export async function seedDefaultCategories(
   newId: () => string,
   userId: string | null = null
 ): Promise<void> {
-  const existing = (await listCategories()).filter((c) => !c.deleted);
+  const existing = await listCategories();
   if (existing.length > 0) return;
   const now = Date.now();
   for (const c of DEFAULT_CATEGORIES) {
@@ -228,8 +235,10 @@ async function adoptDefaultCategories(userId: string): Promise<number> {
   let changed = 0;
 
   for (const def of DEFAULT_CATEGORIES) {
+    // Compare the RESOLVED icon, so a category seeded by an older version
+    // (raw SVG path) is still recognised as the built-in it stands for.
     const cat = cats.find(
-      (c) => c.name === def.name && c.icon === def.icon && c.color === def.color
+      (c) => c.name === def.name && categoryIconName(c.icon) === def.icon
     );
     if (!cat) continue;
 
