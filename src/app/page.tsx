@@ -236,7 +236,15 @@ export default function Home() {
     const uid = await getSignedInUserId();
     if (!uid) return;
     setUserId(uid);
-    await syncNow();
+    // Best effort: a pull that fails must not leave a new account with an empty
+    // hub. Seeding after a failure is still safe, because a seeded record's
+    // updatedAt floor can never outrank a real row — including a tombstone — on
+    // the next sync.
+    try {
+      await syncNow();
+    } catch {
+      // Ignored on purpose; see above.
+    }
     await seedDefaultCategories(generateId, uid);
     await assignMissingUserIds(uid);
     await reload();
