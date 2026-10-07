@@ -228,7 +228,7 @@ export default function Home() {
     if (!readiness.ok) {
       const message =
         readiness.blocked === "unsynced-offline"
-          ? "This device has sessions that have not synced yet. Connect to the internet and sync before logging out."
+          ? "This device has changes that have not synced yet. Connect to the internet and sync before logging out."
           : readiness.blocked === "signed-out"
             ? "Sign in again to sync this device before logging out."
             : "Could not reach the server, so nothing was deleted. Try again in a moment.";
