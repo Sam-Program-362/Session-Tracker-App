@@ -349,6 +349,14 @@ export default function Home() {
   // app is closed or the phone locks, without needing an effect.
   const visibleScreen: Screen = runningSession ? "running" : screen;
 
+  // Nothing is decided until the LOCAL signed-in check has run, so draw the
+  // plain background and no screen at all. Rendering the login screen here
+  // would show it for one frame to a device that is about to go straight into
+  // the app. (Every hook above has already run, so this early return is safe.)
+  if (signedIn === null) {
+    return <div className="flex h-full flex-col" aria-busy="true" />;
+  }
+
   return (
     <div className="flex h-full flex-col">
       <div key={visibleScreen} className={`flex min-h-0 flex-1 flex-col screen-${dir}`}>
