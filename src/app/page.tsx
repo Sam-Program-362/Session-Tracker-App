@@ -222,13 +222,21 @@ export default function Home() {
     setScreen(next);
   }, []);
 
-  // An explicit sign-in: remember the account, put the built-in categories
-  // back if this device was wiped by a log out, claim anything created before
-  // signing in, then sync.
+  // An explicit sign-in: remember the account, fetch what the account already
+  // has, then put back only the built-in categories it is missing and claim
+  // anything created before signing in.
+  //
+  // The pull comes FIRST on purpose. A log out wipes this device, so at this
+  // moment we know nothing about the account — and a built-in the user deleted
+  // only exists as a tombstone on the server. Pulling before we invent anything
+  // brings that tombstone back, which is what tells the seeding (and the
+  // adoption below) to leave it alone instead of re-creating it with a newer
+  // updatedAt that would overwrite the deletion everywhere.
   const afterSignIn = useCallback(async () => {
     const uid = await getSignedInUserId();
     if (!uid) return;
     setUserId(uid);
+    await syncNow();
     await seedDefaultCategories(generateId, uid);
     await assignMissingUserIds(uid);
     await reload();

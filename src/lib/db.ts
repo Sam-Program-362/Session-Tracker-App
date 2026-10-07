@@ -88,35 +88,80 @@ export function defaultCategoryId(userId: string, slug: string): string {
   return `${userId}-${slug}`;
 }
 
+export type DefaultCategory = (typeof DEFAULT_CATEGORIES)[number];
+
 /**
- * Seed the built-in categories, but only on a device that has never held a
- * category at all.
+ * The built-in categories this device does not already hold.
  *
- * Deleted records count: once every category has been deleted, the seeding
- * code must leave the blank hub alone instead of putting the built-in four
- * back (which would also re-upload them on the next sync).
+ * A record counts as already held whatever its state — live OR deleted — and
+ * whether it matches by the account's shared id for that built-in
+ * ("<userId>-hobby") or by name. This is the guard that keeps a deleted
+ * built-in deleted: the account's own tombstone is a record too, so a later
+ * sign-in cannot re-create it and hand the sync a newer updatedAt to upload
+ * over the tombstone.
+ */
+export function missingDefaultCategories(
+  existing: Category[],
+  userId: string | null = null
+): DefaultCategory[] {
+  return DEFAULT_CATEGORIES.filter((def) => {
+    const sharedId = userId ? defaultCategoryId(userId, def.slug) : null;
+    return !existing.some(
+      (c) => c.name === def.name || (sharedId !== null && c.id === sharedId)
+    );
+  });
+}
+
+/**
+ * The timestamp a seeded built-in carries.
+ *
+ * Zero, on purpose: seeding is not an edit, so a seeded record must never look
+ * newer than something real. That is what stops it from overwriting a deletion
+ * on the server — a tombstone with any real timestamp wins the merge, whether
+ * or not this device managed to pull it first. The moment the user changes the
+ * category, updatedAt becomes the real time and it syncs normally.
+ */
+export const SEEDED_UPDATED_AT = 0;
+
+/** Build one built-in category record. */
+export function newDefaultCategory(
+  def: DefaultCategory,
+  id: string,
+  userId: string | null,
+  createdAt: number
+): Category {
+  return {
+    id,
+    userId,
+    name: def.name,
+    icon: def.icon,
+    color: def.color,
+    createdAt,
+    updatedAt: SEEDED_UPDATED_AT,
+    deleted: false,
+  };
+}
+
+/**
+ * Seed the built-in categories this device is missing.
+ *
+ * Per-category, not all-or-nothing: deleting one built-in leaves the other
+ * three in place, and the deleted one stays deleted across a log out and a
+ * later sign-in, because its tombstone (or the account's copy) is still a
+ * record when this runs.
  */
 export async function seedDefaultCategories(
   newId: () => string,
   userId: string | null = null
 ): Promise<void> {
-  const existing = await listCategories();
-  if (existing.length > 0) return;
+  const pending = missingDefaultCategories(await listCategories(), userId);
+  if (pending.length === 0) return;
   const now = Date.now();
-  for (const c of DEFAULT_CATEGORIES) {
+  for (const c of pending) {
     // A device that already knows its account seeds the shared ids straight
     // away; one that does not seeds random ids, renamed at first sign-in.
     const id = userId ? defaultCategoryId(userId, c.slug) : newId();
-    await addCategory({
-      id,
-      userId,
-      name: c.name,
-      icon: c.icon,
-      color: c.color,
-      createdAt: now,
-      updatedAt: now,
-      deleted: false,
-    });
+    await addCategory(newDefaultCategory(c, id, userId, now));
   }
 }
 
