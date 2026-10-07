@@ -379,6 +379,7 @@ export default function Home() {
             onEdit={setEditingCategory}
             onAddCategory={() => setSheetOpen(true)}
             onOpenLogs={() => go("logs", "back")}
+            onLogOut={logOut}
           />
         )}
 
@@ -545,12 +546,14 @@ function CategoriesScreen({
   onEdit,
   onAddCategory,
   onOpenLogs,
+  onLogOut,
 }: {
   categories: Category[];
   onSelect: (c: Category) => void;
   onEdit: (c: Category) => void;
   onAddCategory: () => void;
   onOpenLogs: () => void;
+  onLogOut: () => Promise<LogOutResult>;
 }) {
   return (
     <div className="flex flex-1 flex-col min-h-0">
@@ -594,7 +597,95 @@ function CategoriesScreen({
         >
           Session&apos;s Logs
         </button>
+
+        {/* Same quiet text style, and the same guarded flow as Session's Logs. */}
+        <div className="mt-3">
+          <LogOutControl onLogOut={onLogOut} />
+        </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The one log-out control, mounted from both Session's Logs and the category
+ * hub. It owns only the confirm step and the refusal message; the guarded flow
+ * itself (sync first, refuse when anything would be lost, then wipe) lives in
+ * Home's logOut, so both entry points behave identically by construction.
+ */
+function LogOutControl({
+  onLogOut,
+}: {
+  onLogOut: () => Promise<LogOutResult>;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function confirmLogOut() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    const result = await onLogOut();
+    setBusy(false);
+    if (!result.ok) {
+      // Refused: stay right here and say why. Nothing was deleted.
+      setConfirming(false);
+      setError(result.message);
+      return;
+    }
+    // Success returns the app to the LOG IN screen, unmounting this.
+    setConfirming(false);
+  }
+
+  return (
+    <div className="flex flex-col items-center">
+      {confirming ? (
+        <div className="w-full rounded-2xl border border-border/60 bg-white p-3.5 shadow-soft">
+          <p className="text-xs leading-relaxed text-foreground-muted">
+            Log out and delete the sessions stored on this device?
+          </p>
+          <div className="mt-3 flex gap-2">
+            <CapsuleButton
+              variant="ghost"
+              onClick={() => {
+                setConfirming(false);
+                setError(null);
+              }}
+              className="flex-1"
+            >
+              Cancel
+            </CapsuleButton>
+            <CapsuleButton
+              onClick={() => void confirmLogOut()}
+              disabled={busy}
+              className="flex-1"
+            >
+              {busy ? "Checking" : "Log out"}
+            </CapsuleButton>
+          </div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => {
+            setConfirming(true);
+            setError(null);
+          }}
+          className="text-xs font-medium text-foreground-muted transition hover:text-foreground"
+        >
+          Log out
+        </button>
+      )}
+
+      {error ? (
+        <p
+          role="alert"
+          className="mt-3 w-full rounded-xl bg-red-50 px-3 py-2.5 text-xs leading-relaxed text-red-700"
+        >
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -812,25 +903,6 @@ function LogsScreen({
 }) {
   const now = useTicker(30_000);
   const [openDay, setOpenDay] = useState<string | null>(null);
-  const [confirmingLogOut, setConfirmingLogOut] = useState(false);
-  const [loggingOut, setLoggingOut] = useState(false);
-  const [logOutError, setLogOutError] = useState<string | null>(null);
-
-  async function confirmLogOut() {
-    if (loggingOut) return;
-    setLoggingOut(true);
-    setLogOutError(null);
-    const result = await onLogOut();
-    setLoggingOut(false);
-    if (!result.ok) {
-      // Refused: stay right here and say why. Nothing was deleted.
-      setConfirmingLogOut(false);
-      setLogOutError(result.message);
-      return;
-    }
-    // Success unmounts this screen (the app is back on LOG IN).
-    setConfirmingLogOut(false);
-  }
 
   const days = useMemo(() => groupByDay(logs, now), [logs, now]);
 
@@ -907,53 +979,8 @@ function LogsScreen({
         </p>
 
         {/* Log out — the last thing in Settings, and the only destructive one. */}
-        <div className="mt-4 flex flex-col items-center">
-          {confirmingLogOut ? (
-            <div className="w-full rounded-2xl border border-border/60 bg-white p-3.5 shadow-soft">
-              <p className="text-xs leading-relaxed text-foreground-muted">
-                Log out and delete the sessions stored on this device?
-              </p>
-              <div className="mt-3 flex gap-2">
-                <CapsuleButton
-                  variant="ghost"
-                  onClick={() => {
-                    setConfirmingLogOut(false);
-                    setLogOutError(null);
-                  }}
-                  className="flex-1"
-                >
-                  Cancel
-                </CapsuleButton>
-                <CapsuleButton
-                  onClick={() => void confirmLogOut()}
-                  disabled={loggingOut}
-                  className="flex-1"
-                >
-                  {loggingOut ? "Checking" : "Log out"}
-                </CapsuleButton>
-              </div>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => {
-                setConfirmingLogOut(true);
-                setLogOutError(null);
-              }}
-              className="text-xs font-medium text-foreground-muted transition hover:text-foreground"
-            >
-              Log out
-            </button>
-          )}
-
-          {logOutError ? (
-            <p
-              role="alert"
-              className="mt-3 w-full rounded-xl bg-red-50 px-3 py-2.5 text-xs leading-relaxed text-red-700"
-            >
-              {logOutError}
-            </p>
-          ) : null}
+        <div className="mt-4">
+          <LogOutControl onLogOut={onLogOut} />
         </div>
       </div>
     </div>
