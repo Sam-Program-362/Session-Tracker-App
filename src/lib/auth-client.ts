@@ -9,6 +9,23 @@ import { createAuthClient } from "better-auth/react";
 const CACHE_KEY = "session-tracker:signed-in";
 const USER_ID_KEY = "session-tracker:user-id";
 
+/**
+ * How long a background session check may take before it is treated as
+ * inconclusive. A slow network must never be read as "signed out".
+ */
+const SESSION_TIMEOUT_MS = 8_000;
+
+/**
+ * What the server told us about the session.
+ *
+ * - "valid"   — a real session came back; this device's account is confirmed.
+ * - "invalid" — the server clearly answered "nobody is signed in" (401 or an
+ *               empty session body). The local data keeps working.
+ * - "unknown" — no answer: offline, timed out, or a server/internal error.
+ *               The device stays signed in.
+ */
+export type SessionCheck = "valid" | "invalid" | "unknown";
+
 let client: ReturnType<typeof createAuthClient> | null = null;
 
 /**
@@ -60,6 +77,45 @@ export function getCachedUserId(): string | null {
 }
 
 /**
+ * Has this device ever signed in?
+ *
+ * The cached account id is the signal that matters, so the answer is known
+ * without touching the network and a returning user never sees the form
+ * again. The older boolean flag is still honoured so devices that only have
+ * that flag are not asked to sign in a second time.
+ */
+export function hasSignedInBefore(): boolean {
+  return getCachedUserId() !== null || isCachedSignedIn();
+}
+
+/** The user id inside a sign-in / get-session response, if there is one. */
+function extractUserId(data: unknown): string | null {
+  if (!data || typeof data !== "object") return null;
+  const user = (data as { user?: { id?: unknown } }).user;
+  return typeof user?.id === "string" && user.id.length > 0 ? user.id : null;
+}
+
+/** A numeric HTTP status on a Better Auth error object, or null. */
+function readStatus(error: unknown): number | null {
+  if (!error || typeof error !== "object") return null;
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" ? status : null;
+}
+
+/** Remember both halves of "this device belongs to that account". */
+function rememberSignedInUser(data: unknown): void {
+  const id = extractUserId(data);
+  if (id) setCachedUserId(id);
+  setCachedSignedIn(true);
+}
+
+/** Forget this device's account. Only ever used when the user logs out. */
+export function clearCachedUser(): void {
+  setCachedUserId(null);
+  setCachedSignedIn(false);
+}
+
+/**
  * The signed-in user's id. Online it comes from the session cookie and is
  * cached; offline it falls back to the id remembered on this device.
  */
@@ -98,14 +154,14 @@ export async function signIn(
   password: string
 ): Promise<SignInResult> {
   try {
-    const { error } = await getClient().signIn.email({ email, password });
+    const { data, error } = await getClient().signIn.email({ email, password });
     if (error) {
       return {
         ok: false,
         error: error.message || "That email and password did not match.",
       };
     }
-    setCachedSignedIn(true);
+    rememberSignedInUser(data);
     return { ok: true };
   } catch {
     return {
@@ -121,14 +177,14 @@ export async function signUp(
   name: string
 ): Promise<SignInResult> {
   try {
-    const { error } = await getClient().signUp.email({ email, password, name });
+    const { data, error } = await getClient().signUp.email({ email, password, name });
     if (error) {
       return {
         ok: false,
         error: error.message || "That account could not be created.",
       };
     }
-    setCachedSignedIn(true);
+    rememberSignedInUser(data);
     return { ok: true };
   } catch {
     return {
@@ -139,28 +195,65 @@ export async function signUp(
 }
 
 /**
- * Resolve the current sign-in state.
+ * Ask the server about the session, in the background.
  *
- * Offline: falls back to the cached flag so the app still opens.
- * Online: refreshes the flag from the real session cookie.
+ * Only a clear answer is allowed to change what we believe:
+ *   - offline, a timeout, a thrown request or a server error all return
+ *     "unknown", so the app keeps opening on the cached account with its
+ *     local data intact;
+ *   - a 401 or an empty session body returns "invalid", which is the one
+ *     case where the sign-in form is shown.
  */
-export async function resolveSignedIn(): Promise<boolean> {
-  try {
-    const { data } = await getClient().getSession();
-    const id = data?.user?.id ?? null;
-    setCachedSignedIn(Boolean(id));
-    setCachedUserId(id);
-    return Boolean(id);
-  } catch {
-    return isCachedSignedIn();
+export async function verifySession(): Promise<SessionCheck> {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    return "unknown";
   }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<{ kind: "timeout" }>((resolve) => {
+    timer = setTimeout(() => resolve({ kind: "timeout" }), SESSION_TIMEOUT_MS);
+  });
+
+  // Never rejects: a failed request is an answer too, it just is not a
+  // verdict, and it must not surface as an unhandled rejection when the
+  // timeout wins the race.
+  const call = (async () => {
+    try {
+      const { data, error } = await getClient().getSession();
+      return { kind: "answer" as const, data, error };
+    } catch {
+      return { kind: "network" as const, data: null, error: null };
+    }
+  })();
+
+  const result = await Promise.race([call, timeout]);
+  if (timer) clearTimeout(timer);
+
+  if (result.kind !== "answer") return "unknown";
+
+  if (result.error) {
+    // Only a 401 means the session is really gone.
+    return readStatus(result.error) === 401 ? "invalid" : "unknown";
+  }
+
+  const id = extractUserId(result.data);
+  if (id) {
+    setCachedUserId(id);
+    setCachedSignedIn(true);
+    return "valid";
+  }
+
+  // The server answered, and the answer was "nobody is signed in": drop the
+  // cached account so the sign-in form becomes available again.
+  clearCachedUser();
+  return "invalid";
 }
 
 export async function signOut(): Promise<void> {
   try {
     await getClient().signOut();
   } catch {
-    // Offline sign-out still clears the local flag below.
+    // Offline sign-out still clears the device below.
   }
-  setCachedSignedIn(false);
+  clearCachedUser();
 }

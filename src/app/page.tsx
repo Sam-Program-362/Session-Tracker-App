@@ -15,16 +15,19 @@ import {
   listTasks,
   saveTask,
   toggleTaskDone,
+  clearAllLocalData,
 } from "@/lib/db";
 import { generateId } from "@/lib/ids";
 import { ICONS, PICKABLE_ICONS, type IconName } from "@/lib/icons";
 import { CapsuleButton, TextInput, AuthForm } from "@/components";
 import {
-  resolveSignedIn,
+  verifySession,
+  hasSignedInBefore,
   getSignedInUserId,
   getCachedUserId,
+  signOut,
 } from "@/lib/auth-client";
-import { syncNow } from "@/lib/sync";
+import { syncNow, checkBeforeLogout, clearLastSyncAt } from "@/lib/sync";
 import {
   formatDuration,
   formatTime12,
@@ -39,6 +42,8 @@ import type {
 } from "@/lib/types";
 
 type Screen = "login" | "categories" | "running" | "logs";
+
+type LogOutResult = { ok: true } | { ok: false; message: string };
 
 // ---------------------------------------------------------------------------
 // Hooks
@@ -67,6 +72,13 @@ export default function Home() {
   const [dir, setDir] = useState<"back" | "forward">("forward");
   // null while we are still finding out whether this device is signed in.
   const [signedIn, setSignedIn] = useState<boolean | null>(null);
+  // Whether this device has an account remembered in local storage. This is
+  // what decides "straight into the app" versus "show the form" — never the
+  // network, which is only consulted in the background.
+  const [deviceAccount, setDeviceAccount] = useState(false);
+  // Set only when the server CLEARLY said the session is gone (401 / empty
+  // session). The app keeps working; the settings line says so.
+  const [sessionGone, setSessionGone] = useState(false);
   // The Better Auth account that owns every record created on this device.
   const [userId, setUserId] = useState<string | null>(null);
   // Plain-text sync status for Settings; Step 4 renders it.
@@ -117,29 +129,48 @@ export default function Home() {
     if (claimed > 0) await reload();
   }, [reload]);
 
-  // Resolve the session once on open. Online it refreshes from the cookie,
-  // offline it falls back to the flag cached on the device, so a signed-in
-  // user goes straight into the app either way.
-  useEffect(() => {
-    let alive = true;
-    void (async () => {
-      const result = await resolveSignedIn();
-      if (!alive) return;
-      setSignedIn(result);
-      if (result) await adoptUser();
-    })();
-    return () => {
-      alive = false;
-    };
+  // Verify the session with the server in the background. Only a clear "no
+  // session" changes anything: the device then keeps its local data, stays
+  // inside the app, and the settings line offers a sign-in.
+  const verifyInBackground = useCallback(async () => {
+    const state = await verifySession();
+    if (state === "valid") {
+      setSessionGone(false);
+      setDeviceAccount(true);
+      await adoptUser();
+    } else if (state === "invalid") {
+      setSessionGone(true);
+      setDeviceAccount(false);
+    }
+    // "unknown" (offline, timeout, server error): change nothing at all.
   }, [adoptUser]);
+
+  // Open straight into the session when this device has signed in before. The
+  // decision is made from local storage, so a slow or missing connection can
+  // never send a signed-in user back to the form; the server is asked
+  // afterwards, in the background.
+  useEffect(() => {
+    const remembered = hasSignedInBefore();
+    setDeviceAccount(remembered);
+    setSignedIn(remembered);
+    if (remembered) void verifyInBackground();
+  }, [verifyInBackground]);
 
   // Fire-and-forget: no screen ever waits on the network. When a sync lands
   // we redraw so anything the server held shows up straight away.
   const triggerSync = useCallback(() => {
     void (async () => {
       const outcome = await syncNow();
-      setSyncStatus(outcome.ok ? "synced" : "waiting");
-      if (outcome.ok) await reload();
+      if (outcome.ok) {
+        setSessionGone(false);
+        setSyncStatus("synced");
+        await reload();
+        return;
+      }
+      // A 401 from the server is a clear answer, not a network hiccup: the
+      // session is gone, so say so instead of "waiting for internet".
+      if (outcome.reason === "signed-out") setSessionGone(true);
+      setSyncStatus("waiting");
     })();
   }, [reload]);
 
@@ -171,6 +202,55 @@ export default function Home() {
     setDir(dir);
     setScreen(next);
   }, []);
+
+  // An explicit sign-in: remember the account, put the built-in categories
+  // back if this device was wiped by a log out, claim anything created before
+  // signing in, then sync.
+  const afterSignIn = useCallback(async () => {
+    const uid = await getSignedInUserId();
+    if (!uid) return;
+    setUserId(uid);
+    await seedDefaultCategories(generateId, uid);
+    await assignMissingUserIds(uid);
+    await reload();
+    triggerSync();
+  }, [reload, triggerSync]);
+
+  /**
+   * Log out — the one action allowed to delete this device's data.
+   *
+   * Nothing is removed until we know the server has a copy: online a sync
+   * must succeed, and offline the device must hold no unsynced changes. Any
+   * other outcome says why and leaves everything exactly as it is.
+   */
+  const logOut = useCallback(async (): Promise<LogOutResult> => {
+    const readiness = await checkBeforeLogout();
+    if (!readiness.ok) {
+      const message =
+        readiness.blocked === "unsynced-offline"
+          ? "This device has sessions that have not synced yet. Connect to the internet and sync before logging out."
+          : readiness.blocked === "signed-out"
+            ? "Sign in again to sync this device before logging out."
+            : "Could not reach the server, so nothing was deleted. Try again in a moment.";
+      return { ok: false, message };
+    }
+
+    await signOut();
+    clearLastSyncAt();
+    await clearAllLocalData();
+
+    setUserId(null);
+    setSignedIn(false);
+    setDeviceAccount(false);
+    setSessionGone(false);
+    setSyncStatus("waiting");
+    setCategories([]);
+    setLogs([]);
+    setRetention(1);
+    setSheetOpen(false);
+    go("login", "back");
+    return { ok: true };
+  }, [go]);
 
   const startSession = useCallback(
     async (category: Category) => {
@@ -253,10 +333,19 @@ export default function Home() {
       <div key={visibleScreen} className={`flex min-h-0 flex-1 flex-col screen-${dir}`}>
         {visibleScreen === "login" && (
           <LoginScreen
-            onLoggedIn={() => {
+            hasDeviceAccount={deviceAccount}
+            onContinue={() => {
+              // Straight in — the session is checked in the background.
               setSignedIn(true);
               go("categories");
-              void adoptUser();
+              void verifyInBackground();
+            }}
+            onLoggedIn={() => {
+              setSignedIn(true);
+              setDeviceAccount(true);
+              setSessionGone(false);
+              go("categories");
+              void afterSignIn();
             }}
             onOpenLogs={() => go("logs")}
           />
@@ -286,8 +375,10 @@ export default function Home() {
             categories={categories}
             retentionMonths={retention}
             syncStatus={syncStatus}
+            sessionGone={sessionGone}
             onSetRetention={changeRetention}
             onSelectCategory={startSession}
+            onLogOut={logOut}
             onBack={() => go("login", "back")}
           />
         )}
@@ -322,14 +413,28 @@ export default function Home() {
 // ---------------------------------------------------------------------------
 
 function LoginScreen({
+  hasDeviceAccount,
+  onContinue,
   onLoggedIn,
   onOpenLogs,
 }: {
+  hasDeviceAccount: boolean;
+  onContinue: () => void;
   onLoggedIn: () => void;
   onOpenLogs: () => void;
 }) {
-  // The LOG IN pill reveals the real sign in / create account form.
+  // The LOG IN pill reveals the real sign in / create account form — but only
+  // on a device that has never signed in. A device with a remembered account
+  // goes straight into the app; the form is never shown on the way.
   const [formOpen, setFormOpen] = useState(false);
+
+  function handleLogIn() {
+    if (hasDeviceAccount) {
+      onContinue();
+      return;
+    }
+    setFormOpen(true);
+  }
 
   return (
     <main className="flex flex-1 flex-col safe-area-bottom">
@@ -352,7 +457,7 @@ function LoginScreen({
             <div className="mt-9 flex justify-center">
               <CapsuleButton
                 size="lg"
-                onClick={() => setFormOpen(true)}
+                onClick={handleLogIn}
                 className="w-48"
               >
                 LOG IN
@@ -608,20 +713,43 @@ function LogsScreen({
   categories,
   retentionMonths,
   syncStatus,
+  sessionGone,
   onSetRetention,
   onSelectCategory,
+  onLogOut,
   onBack,
 }: {
   logs: SessionLog[];
   categories: Category[];
   retentionMonths: Retention;
   syncStatus: "synced" | "waiting";
+  sessionGone: boolean;
   onSetRetention: (n: Retention) => void;
   onSelectCategory: (c: Category) => void;
+  onLogOut: () => Promise<LogOutResult>;
   onBack: () => void;
 }) {
   const now = useTicker(30_000);
   const [openDay, setOpenDay] = useState<string | null>(null);
+  const [confirmingLogOut, setConfirmingLogOut] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [logOutError, setLogOutError] = useState<string | null>(null);
+
+  async function confirmLogOut() {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    setLogOutError(null);
+    const result = await onLogOut();
+    setLoggingOut(false);
+    if (!result.ok) {
+      // Refused: stay right here and say why. Nothing was deleted.
+      setConfirmingLogOut(false);
+      setLogOutError(result.message);
+      return;
+    }
+    // Success unmounts this screen (the app is back on LOG IN).
+    setConfirmingLogOut(false);
+  }
 
   const days = useMemo(() => groupByDay(logs, now), [logs, now]);
 
@@ -689,8 +817,62 @@ function LogsScreen({
         </div>
 
         <p className="mt-3 text-xs text-foreground-muted">
-          {syncStatus === "synced" ? "Synced" : "Waiting for internet"}
+          {sessionGone
+            ? "Sign in again to sync"
+            : syncStatus === "synced"
+              ? "Synced"
+              : "Waiting for internet"}
         </p>
+
+        {/* Log out — the last thing in Settings, and the only destructive one. */}
+        <div className="mt-4 flex flex-col items-center">
+          {confirmingLogOut ? (
+            <div className="w-full rounded-2xl border border-border/60 bg-white p-3.5 shadow-soft">
+              <p className="text-xs leading-relaxed text-foreground-muted">
+                Log out and delete the sessions stored on this device?
+              </p>
+              <div className="mt-3 flex gap-2">
+                <CapsuleButton
+                  variant="ghost"
+                  onClick={() => {
+                    setConfirmingLogOut(false);
+                    setLogOutError(null);
+                  }}
+                  className="flex-1"
+                >
+                  Cancel
+                </CapsuleButton>
+                <CapsuleButton
+                  onClick={() => void confirmLogOut()}
+                  disabled={loggingOut}
+                  className="flex-1"
+                >
+                  {loggingOut ? "Checking" : "Log out"}
+                </CapsuleButton>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setConfirmingLogOut(true);
+                setLogOutError(null);
+              }}
+              className="text-xs font-medium text-foreground-muted transition hover:text-foreground"
+            >
+              Log out
+            </button>
+          )}
+
+          {logOutError ? (
+            <p
+              role="alert"
+              className="mt-3 w-full rounded-xl bg-red-50 px-3 py-2.5 text-xs leading-relaxed text-red-700"
+            >
+              {logOutError}
+            </p>
+          ) : null}
+        </div>
       </div>
     </div>
   );

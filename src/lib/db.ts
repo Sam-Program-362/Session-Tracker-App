@@ -263,6 +263,33 @@ async function adoptDefaultCategories(userId: string): Promise<number> {
  * attaches it to the person who just signed in. Returns how many records
  * changed so the caller knows it has to redraw.
  */
+/**
+ * Delete every record this device holds.
+ *
+ * Only ever called when the user logs out: the account id is dropped at the
+ * same moment, so nothing on the device belongs to anybody any more. The
+ * object stores themselves stay in place (an empty database is not data), so
+ * the next sign-in starts from the same schema.
+ */
+export function clearAllLocalData(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    openDb()
+      .then((db) => {
+        const t = db.transaction(
+          [STORE_CATEGORIES, STORE_SESSIONS, STORE_TASKS],
+          "readwrite"
+        );
+        t.objectStore(STORE_CATEGORIES).clear();
+        t.objectStore(STORE_SESSIONS).clear();
+        t.objectStore(STORE_TASKS).clear();
+        t.oncomplete = () => resolve();
+        t.onerror = () => reject(t.error);
+        t.onabort = () => reject(t.error);
+      })
+      .catch(reject);
+  });
+}
+
 export async function assignMissingUserIds(userId: string): Promise<number> {
   let changed = await adoptDefaultCategories(userId);
 

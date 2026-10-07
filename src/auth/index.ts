@@ -27,6 +27,13 @@ function buildAuth() {
     emailAndPassword: {
       enabled: true,
     },
+    session: {
+      // A phone that is only opened now and then must not be asked for a
+      // password again: the session lasts a year and is refreshed (slid
+      // forward) once it is a day old.
+      expiresIn: 365 * 24 * 60 * 60,
+      updateAge: 24 * 60 * 60,
+    },
     baseURL: process.env.BETTER_AUTH_URL,
     secret: process.env.BETTER_AUTH_SECRET,
   });

@@ -36,6 +36,22 @@ export function getLastSyncAt(): number | null {
   }
 }
 
+/**
+ * Drop the stored watermark.
+ *
+ * Called when the device is wiped on log out: the watermark belongs to the
+ * account that just left, and keeping it would make the next account's pull
+ * start from somebody else's clock.
+ */
+export function clearLastSyncAt(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(LAST_SYNC_KEY);
+  } catch {
+    // Private mode: there was nothing durable to remove.
+  }
+}
+
 function setLastSyncAt(value: number): void {
   if (typeof window === "undefined") return;
   try {
@@ -48,6 +64,56 @@ function setLastSyncAt(value: number): void {
 /** Same window the app uses to soft-delete old logs. */
 function retentionCutoff(months: Retention): number {
   return Date.now() - months * 30 * 86_400_000;
+}
+
+/** Why logging out is not safe right now. */
+export type LogoutBlocker =
+  /** Offline, with records that have never reached the server. */
+  | "unsynced-offline"
+  /** Online, but the sync itself failed, so we cannot claim a clean copy. */
+  | "sync-failed"
+  /** The session is gone, so there is nothing to sync with. */
+  | "signed-out";
+
+/**
+ * Can this device be wiped without losing anything?
+ *
+ * Online, the only trustworthy answer comes from a real sync, so one is run
+ * and must succeed. Offline, the device is inspected instead: anything edited
+ * after the last successful sync — and any stopwatch still running, which is
+ * never uploaded — would be destroyed, so it must not be allowed.
+ */
+export async function checkBeforeLogout(): Promise<
+  { ok: true } | { ok: false; blocked: LogoutBlocker }
+> {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    return (await hasUnsyncedChanges())
+      ? { ok: false, blocked: "unsynced-offline" }
+      : { ok: true };
+  }
+
+  const outcome = await syncNow();
+  if (outcome.ok) return { ok: true };
+  return {
+    ok: false,
+    blocked: outcome.reason === "signed-out" ? "signed-out" : "sync-failed",
+  };
+}
+
+/**
+ * Records that sync has not put on the server yet: everything edited after
+ * the last successful sync, plus a session that is still running.
+ */
+async function hasUnsyncedChanges(): Promise<boolean> {
+  const [cats, logs] = await Promise.all([listCategories(), listSessions()]);
+  if (logs.some((l) => l.status === "running" && !l.deleted)) return true;
+  // No watermark means this device has never completed a sync, so every
+  // record it holds is still unsynced.
+  const watermark = getLastSyncAt() ?? 0;
+  return (
+    cats.some((c) => c.updatedAt > watermark) ||
+    logs.some((l) => l.updatedAt > watermark)
+  );
 }
 
 let inFlight: Promise<SyncOutcome> | null = null;
